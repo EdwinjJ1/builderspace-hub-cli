@@ -1,0 +1,38 @@
+{
+  "name": "@builderspace/hub-cli",
+  "version": "0.1.0",
+  "description": "BuilderSpace Hub 的命令行工具：给人用，也给 AI Agent 用。",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "bshub": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/bin.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "smoke": "pnpm build && node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@9.15.4"
+}

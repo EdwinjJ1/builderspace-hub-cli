@@ -1,0 +1,9 @@
+# Credentials, the HTTP client and the output contract need a maintainer's review.
+/src/core/config.ts    @EdwinjJ1
+/src/core/client.ts    @EdwinjJ1
+/src/core/errors.ts    @EdwinjJ1
+/src/core/output.ts    @EdwinjJ1
+/src/commands/auth.ts  @EdwinjJ1
+/docs/ERROR_CONTRACT.md @EdwinjJ1
+/.github/              @EdwinjJ1
+/SECURITY.md           @EdwinjJ1
