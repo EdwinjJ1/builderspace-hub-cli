@@ -4,8 +4,10 @@ import type { Deps } from "./core/runtime.js";
 import { registerAuth } from "./commands/auth.js";
 import { registerConfig } from "./commands/config.js";
 import { registerDocs } from "./commands/docs.js";
+import { registerMcp } from "./commands/mcp.js";
 import { registerMeta } from "./commands/meta.js";
 import { registerResources } from "./commands/resources.js";
+import { registerWork } from "./commands/work.js";
 import { EXIT_CODES } from "./core/errors.js";
 import { formats } from "./core/output.js";
 
@@ -34,7 +36,9 @@ export async function runCli(argv: string[], deps: Deps): Promise<number> {
   registerAuth(program, deps, exit);
   registerMeta(program, deps, exit);
   registerResources(program, deps, exit);
+  registerWork(program, deps, exit);
   registerDocs(program, deps, exit);
+  registerMcp(program, deps, exit);
 
   try {
     await program.parseAsync(argv, { from: "user" });

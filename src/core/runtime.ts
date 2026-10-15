@@ -20,6 +20,12 @@ export interface FileAccess {
   writeFile(path: string, data: Uint8Array): Promise<void>;
 }
 
+/** A line-by-line conversation on stdin/stdout, for the MCP server. */
+export interface Stdio {
+  lines: AsyncIterable<string>;
+  write(text: string): void;
+}
+
 export interface Deps {
   writer: Writer;
   env: Record<string, string | undefined>;
@@ -29,6 +35,7 @@ export interface Deps {
   readStdin: () => Promise<string>;
   isInteractive: boolean;
   files?: FileAccess;
+  stdio?: Stdio;
 }
 
 export interface GlobalOptions {

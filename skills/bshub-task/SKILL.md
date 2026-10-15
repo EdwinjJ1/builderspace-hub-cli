@@ -31,10 +31,22 @@ metadata:
 | 截止日期 | `bshub task +due <任务id> --date YYYY-MM-DD`，清除用 `--clear` |
 | 评论 | `bshub task +comment <任务id> --text "…"` |
 | 搜索 | `bshub task +search --project <项目id> --query "…"` |
+| 我的任务（跨项目） | `bshub task +mine [--project <id>] [--include-done]` |
+| 快到期 / 已逾期 | `bshub task +due-soon [--days 7] [--all]`，`bshub task +overdue [--all]` |
+| 总版 | `bshub board +overall --project <项目id>` |
+| 改标题或说明 | `bshub task +update <任务id> --title "…" --description "…"` |
+| 指派 / 取消 | `bshub task +assign <任务id> --member <邮箱\|名字\|me>`，`+unassign` |
+| 标签 | `bshub label list --board <看板id>`，`bshub task +label <任务id> --label <名字> [--remove]` |
+| 检查清单 | `bshub task +checklist <任务id> --name "…" --item "…"`，`bshub task +check <条目id> [--undo]` |
+| 批量新建 | `bshub task +import --board <看板id> --file tasks.json --dry-run`，确认后去掉 `--dry-run` |
+| 备份一个项目 | `bshub export --project <项目id> --out backup.json` |
+| 删除 | `bshub task +delete <任务id> --yes`（不可撤销，先向用户确认） |
 
 ## 注意
 
 - `+move` 只会移到**同一块看板**里的列；那块看板没有目标列时返回 `not_found / unknown_list`，`hint` 里列出了可用的列。
 - `--due` 是日期，按当天 23:59（运行 CLI 的机器的本地时间）保存。
 - 输出任务给用户时，把 `due` 换成用户的本地时间，并显示 `assignees` 里的名字。
-- 「我的任务」「即将到期」「已逾期」这些跨项目视图还没有命令（需要 Hub 新接口），暂时逐个看板用 `+list` 汇总，并告诉用户这是临时做法。
+- `+mine`、`+due-soon`、`+overdue`、`board +overall` 是在客户端逐块看板汇总的，项目多时会多发几个请求，属正常。
+- 指派和标签在 Kan 里只有「切换」接口；CLI 会先看当前状态，已经是目标状态就什么也不做（`changed: false`）。
+- 删除任务不可撤销：必须用户明确要求，并带 `--yes`。

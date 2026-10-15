@@ -12,44 +12,46 @@ import { action, requireValue } from "../core/runtime.js";
  * a task is a card and its column is a list.
  */
 
-interface Member {
+export interface Member {
   publicId: string;
   email?: string;
   user?: { name?: string | null; email?: string } | null;
 }
 
-interface Card {
+export interface Card {
   publicId: string;
   title: string;
   description?: string | null;
   dueDate?: string | null;
-  labels?: { name: string }[];
+  labels?: { publicId?: string; name: string }[];
   members?: Member[];
+  checklists?: { publicId: string; name: string; items?: { publicId: string; title: string; completed: boolean }[] }[];
 }
 
-interface List {
+export interface List {
   publicId: string;
   name: string;
   index?: number;
   cards?: Card[];
 }
 
-interface BoardDetail {
+export interface BoardDetail {
   publicId: string;
   name: string;
   lists: List[];
+  labels?: { publicId: string; name: string }[];
   workspace?: { publicId: string; name?: string; members?: Member[] };
 }
 
-interface CardDetail extends Card {
+export interface CardDetail extends Card {
   list?: { publicId: string; name: string; board?: { publicId: string; name: string } };
 }
 
-const memberName = (member: Member) =>
+export const memberName = (member: Member) =>
   member.user?.name?.trim() || member.user?.email || member.email || member.publicId;
 
 /** One task as the CLI prints it: flat, with its column and stage. */
-function taskView(card: Card, list: { publicId: string; name: string }, board?: { publicId: string; name: string }) {
+export function taskView(card: Card, list: { publicId: string; name: string }, board?: { publicId: string; name: string }) {
   return {
     publicId: card.publicId,
     title: card.title,
@@ -62,13 +64,13 @@ function taskView(card: Card, list: { publicId: string; name: string }, board?: 
   };
 }
 
-const getBoard = (client: HubClient, boardId: string) =>
+export const getBoard = (client: HubClient, boardId: string) =>
   client.request<BoardDetail>({ method: "GET", path: `/boards/${encodeURIComponent(boardId)}` });
 
-const getCard = (client: HubClient, cardId: string) =>
+export const getCard = (client: HubClient, cardId: string) =>
   client.request<CardDetail>({ method: "GET", path: `/cards/${encodeURIComponent(cardId)}` });
 
-function resolveList(board: BoardDetail, target: string) {
+export function resolveList(board: BoardDetail, target: string) {
   const list = findList(board.lists, target);
   if (!list) {
     throw new CliError({
@@ -81,7 +83,7 @@ function resolveList(board: BoardDetail, target: string) {
   return list;
 }
 
-function dueFlag(value: string): Date {
+export function dueFlag(value: string): Date {
   const due = parseDueDate(value);
   if (!due) throw validationError("日期要写成 YYYY-MM-DD", "due");
   return due;
