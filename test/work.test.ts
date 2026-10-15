@@ -206,6 +206,15 @@ describe("assigning", () => {
     expect(lastOut().data).toMatchObject({ member: "Me", changed: true, assigned: false });
   });
 
+  it("will not resolve me to an email-less member when the Hub gives no email for the account", async () => {
+    routes[`GET ${H}/users/me`] = () => json({ id: "u1" });
+    routes[`GET ${H}/boards/boardA000001`] = () =>
+      json({ ...boardA, workspace: { ...boardA.workspace, members: [{ publicId: "memb00000009" }] } });
+    expect(await run(["task", "+assign", "cardA0000001", "--member", "me"])).toBe(9);
+    expect(lastErr().error).toMatchObject({ subtype: "unexpected_shape" });
+    expect(writes()).toHaveLength(0);
+  });
+
   it("names the people available when it cannot find one", async () => {
     expect(await run(["task", "+assign", "cardA0000001", "--member", "nobody"])).toBe(5);
     expect(lastErr().error).toMatchObject({ subtype: "unknown_member" });

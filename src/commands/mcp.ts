@@ -41,6 +41,12 @@ interface Tool {
   params: Record<string, Param>;
   /** Changes data in the Hub. Absent with --read-only. */
   write?: boolean;
+  /**
+   * Replaces or removes something that was there (a title, a label, a
+   * document's text), as opposed to only adding. Clients may ask for
+   * confirmation before running these.
+   */
+  destructive?: boolean;
   /** Values used when the agent leaves a parameter out. */
   defaults?: Record<string, string | boolean | number>;
 }
@@ -115,6 +121,7 @@ export const tools: Tool[] = [
   },
   {
     name: "task_move",
+    destructive: true,
     description: "把任务移到同一块看板的另一列。",
     write: true,
     command: ["task", "+move"],
@@ -122,6 +129,7 @@ export const tools: Tool[] = [
   },
   {
     name: "task_update",
+    destructive: true,
     description: "改任务的标题或说明。",
     write: true,
     command: ["task", "+update"],
@@ -129,6 +137,7 @@ export const tools: Tool[] = [
   },
   {
     name: "task_due",
+    destructive: true,
     description: "设置或清除截止日期。",
     write: true,
     command: ["task", "+due"],
@@ -150,6 +159,7 @@ export const tools: Tool[] = [
   },
   {
     name: "task_unassign",
+    destructive: true,
     description: "取消某人对任务的指派。",
     write: true,
     command: ["task", "+unassign"],
@@ -157,6 +167,7 @@ export const tools: Tool[] = [
   },
   {
     name: "task_label",
+    destructive: true,
     description: "给任务加标签，或用 remove 去掉。",
     write: true,
     command: ["task", "+label"],
@@ -175,6 +186,7 @@ export const tools: Tool[] = [
   },
   {
     name: "task_check",
+    destructive: true,
     description: "勾选清单条目，或用 undo 取消勾选。",
     write: true,
     command: ["task", "+check"],
@@ -198,6 +210,7 @@ export const tools: Tool[] = [
   },
   {
     name: "doc_update",
+    destructive: true,
     description: "改文档的标题、说明、文件夹、可读性，或用 text 替换文本内容。需要这份文档的编辑权。",
     write: true,
     command: ["doc", "+update"],
@@ -209,6 +222,10 @@ export const tools: Tool[] = [
       private: flag("设为不可读"),
       public: flag("设为所有登录的人可读"),
       text: text("替换文本内容", { maxLength: 400_000 }),
+      if_unmodified_since: text(
+        "替换 text 时用：doc_cat 返回的 updatedAt。文档在那之后被改过就报冲突，不会覆盖别人的修改。不能和标题、说明、文件夹、可读性一起改",
+        { maxLength: 40, flag: "--if-unmodified-since" },
+      ),
     },
   },
 ];
@@ -369,7 +386,7 @@ export function registerMcp(program: Command, deps: Deps, exit: { code: number }
                 name: tool.name,
                 description: tool.description,
                 inputSchema: schemaOf(tool),
-                annotations: { readOnlyHint: !tool.write, destructiveHint: false, openWorldHint: false },
+                annotations: { readOnlyHint: !tool.write, destructiveHint: tool.destructive === true, openWorldHint: false },
               })),
             });
           case "tools/call": {

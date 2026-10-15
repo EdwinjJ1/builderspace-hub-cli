@@ -32,6 +32,14 @@ const enc = encodeURIComponent;
 
 function resolveMember(members: Member[], who: string, myEmail?: string): Member {
   const wanted = who.trim().toLowerCase();
+  if (wanted === "me" && !myEmail?.trim()) {
+    throw new CliError({
+      type: "api",
+      subtype: "unexpected_shape",
+      message: "Hub 没有返回当前账号的邮箱，不能把「me」对应到项目成员",
+      hint: "改用邮箱、名字或成员 publicId（bshub project get <项目id> 能看到成员）。",
+    });
+  }
   const email = wanted === "me" ? myEmail?.toLowerCase() : wanted;
   const matches = members.filter(
     (member) =>

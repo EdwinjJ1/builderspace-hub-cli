@@ -114,6 +114,28 @@ describe("tool list", () => {
     }
   });
 
+  it("marks tools that replace or remove state as destructive, and additive ones as not", async () => {
+    const [all] = await session([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
+    const hint = (name: string) =>
+      all.result.tools.find((tool: { name: string }) => tool.name === name).annotations.destructiveHint;
+    for (const name of ["doc_update", "task_update", "task_unassign", "task_label", "task_due", "task_move", "task_check"]) {
+      expect(hint(name)).toBe(true);
+    }
+    for (const name of ["doc_create", "task_create", "task_comment", "task_assign", "task_checklist", "task_list"]) {
+      expect(hint(name)).toBe(false);
+    }
+  });
+
+  it("exposes the concurrency token so an agent can avoid overwriting a newer edit", async () => {
+    const [all] = await session([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
+    const update = all.result.tools.find((tool: { name: string }) => tool.name === "doc_update");
+    expect(Object.keys(update.inputSchema.properties)).toContain("if_unmodified_since");
+    const tool = tools.find((t) => t.name === "doc_update")!;
+    expect(argvFor(tool, { document: "doc000000001", text: "x", if_unmodified_since: "2026-10-15T10:00:00.000Z" })).toEqual([
+      "doc", "+update", "doc000000001", "--text=x", "--if-unmodified-since=2026-10-15T10:00:00.000Z",
+    ]);
+  });
+
   it("gives every tool a closed object schema", async () => {
     const [all] = await session([{ jsonrpc: "2.0", id: 1, method: "tools/list" }]);
     for (const tool of all.result.tools) {

@@ -342,6 +342,14 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
           ...(options.public ? { readable: true } : {}),
         };
         const replacing = options.file !== undefined || options.text !== undefined || options.stdin;
+        if (options.ifUnmodifiedSince && Object.keys(patch).length > 0) {
+          // Changing details advances the document's update time, which would make the check fail against our own change.
+          throw validationError(
+            "--if-unmodified-since 不能和 --title / --description / --folder / --private / --public 一起用",
+            "if-unmodified-since",
+            "先改信息，再用 doc cat 重新拿 updatedAt，单独替换内容。",
+          );
+        }
         if (Object.keys(patch).length === 0 && !replacing) {
           throw validationError("没有要改的内容：给至少一个 --title / --description / --folder / --private / --public / 内容来源", "title");
         }

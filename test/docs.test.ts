@@ -309,6 +309,14 @@ describe("doc +update", () => {
     expect(await run(["doc", "+update", "doc000000001", "--title", "t", "--if-unmodified-since", "x"])).toBe(2);
   });
 
+  it("will not combine the freshness check with detail changes, which would defeat it", async () => {
+    expect(
+      await run(["doc", "+update", "doc000000001", "--text", "x", "--private", "--if-unmodified-since", "2026-10-15T10:00:00.000Z"]),
+    ).toBe(2);
+    expect(lastErr().error).toMatchObject({ param: "if-unmodified-since" });
+    expect(calls).toHaveLength(0);
+  });
+
   it("rejects contradictory or empty updates before any request", async () => {
     expect(await run(["doc", "+update", "doc000000001", "--private", "--public"])).toBe(2);
     expect(await run(["doc", "+update", "doc000000001"])).toBe(2);

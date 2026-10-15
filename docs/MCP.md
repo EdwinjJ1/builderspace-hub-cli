@@ -25,6 +25,14 @@ claude mcp add bshub -e BSHUB_URL=https://你的-hub -e BSHUB_API_KEY=… -- bsh
 | `task_list` `task_get` `task_mine` `task_due_soon` `task_overdue` `task_search` `task_activity` | `task_assign` `task_unassign` `task_label` `task_checklist` `task_check` |
 | `doc_list` `doc_get` `doc_cat` | `doc_create` `doc_update` |
 
+## 工具注解
+
+每个工具都带 `readOnlyHint`。会**替换或移除**已有内容的写入工具（`doc_update`、`task_update`、`task_due`、`task_move`、`task_unassign`、`task_label`、`task_check`）标 `destructiveHint: true`，客户端可以据此要求确认；只增不减的（`doc_create`、`task_create`、`task_comment`、`task_assign`、`task_checklist`）标 false。
+
+## 不要覆盖别人的修改
+
+`doc_cat` 返回 `updatedAt`；`doc_update` 替换文本时带上 `if_unmodified_since`，文档在那之后被改过就报冲突。它不能和改标题、说明、文件夹、可读性一起用（改信息本身会更新时间）。
+
 ## 刻意不给的
 
 - **删除**（任务、文档）和**修改文档编辑权限**：让用户去网页里做。

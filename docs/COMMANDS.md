@@ -73,7 +73,7 @@
 | 命令 | 说明 | 状态 |
 | --- | --- | --- |
 | `doc list [--folder] [--search]` | 一个文件夹的内容（不指定是最上层），或搜索 | ✅ |
-| `doc get <id>` / `doc cat <id>` | 详情 / 文本文档的内容 | ✅ |
+| `doc get <id>` / `doc cat <id>` | 详情 / 文本文档的内容和 `updatedAt` | ✅ |
 | `doc +create --title [--file \| --text \| --stdin] [--filename] [--folder] [--private]` | 新建。md / txt / csv / json / html 直接发文本；PDF、PPT 等先上传再完成 | ✅ |
 | `doc +update <id> [--title] [--description] [--folder] [--private\|--public] [--file \| --text \| --stdin]` | 改信息、可读性，或换掉文本内容 | ✅ |
 | `doc +download <id> --out <path>` | 下载到本地 | ✅ |
