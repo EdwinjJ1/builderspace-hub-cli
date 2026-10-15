@@ -23,7 +23,7 @@
 | `POST /documents` | 直接新建文本文档：`{ title, filename, content, description?, folderPublicId?, readable? }` → `Document` |
 | `POST /documents/uploads` | 为二进制文件申请上传：`{ filename, size }` → `{ uploadId, url, method: "PUT", headers? }` |
 | `POST /documents/uploads/{uploadId}/complete` | 文件传完后建成文档：`{ title?, description?, folderPublicId?, readable? }` → `Document` |
-| `PUT /documents/{id}/content` | 替换文本内容：`{ content }`（需要编辑权） |
+| `PUT /documents/{id}/content` | 替换文本内容：`{ content, expectedUpdatedAt? }`（需要编辑权）。带上读取时拿到的 `updatedAt`，文档在那之后被别人改过就回 409，不会覆盖 |
 | `PATCH /documents/{id}` | `{ title?, description?, folderPublicId?, readable? }` → `Document` |
 | `POST /documents/folders` | `{ name, parentPublicId? }` → `{ publicId, name, parentPublicId }` |
 
@@ -33,4 +33,4 @@
 
 1. `readable: false` 的文档，创建时就不可读，不存在「先公开再改」的窗口。CLI 仍会检查返回值，不是 false 就立刻 PATCH，再不行就报 `not_private` 并以非零退出。
 2. 上传链接指向存储服务。CLI **不会**把 API key 发给它。
-3. 文本文档必须是 UTF-8。
+3. 文本文档必须是 UTF-8：读到非 UTF-8 的文件会回 400，不会用替换字符显示。

@@ -213,12 +213,12 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
     .action(
       action(deps, exit, async (runtime, args) => {
         const publicId = requireValue(args[0], "<publicId>");
-        const result = await (await runtime.client()).request<{ content: string }>({
+        const result = await (await runtime.client()).request<{ content: string; updatedAt?: string }>({
           method: "GET",
           root: hub,
           path: documentPath(publicId, "/content"),
         });
-        return { data: { publicId, content: result.content } };
+        return { data: { publicId, content: result.content, updatedAt: result.updatedAt ?? null } };
       }),
     );
 
@@ -307,6 +307,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
     .option("--file <path>", "用这个文本文件的内容替换")
     .option("--text <text>", "用这段文本替换")
     .option("--stdin", "用标准输入的文本替换")
+    .option("--if-unmodified-since <updatedAt>", "替换内容时：只有文档的更新时间还是这个值才保存（用 doc cat 拿到的 updatedAt），否则报冲突，避免覆盖别人的修改")
     .option("--dry-run", "只打印将要发出的请求")
     .action(
       action<{
@@ -318,9 +319,13 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
         file?: string;
         text?: string;
         stdin?: boolean;
+        ifUnmodifiedSince?: string;
         dryRun?: boolean;
       }>(deps, exit, async (runtime, args, options) => {
         const publicId = requireValue(args[0], "<publicId>");
+        if (options.ifUnmodifiedSince && options.file === undefined && options.text === undefined && !options.stdin) {
+          throw validationError("--if-unmodified-since 只在替换内容时有意义", "if-unmodified-since");
+        }
         if (options.private && options.public) throw validationError("--private 和 --public 二选一", "private");
 
         const patch = {
@@ -336,6 +341,10 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
         }
 
         const client = await runtime.client();
+        const contentBody = (text: string) => ({
+          content: text,
+          ...(options.ifUnmodifiedSince ? { expectedUpdatedAt: options.ifUnmodifiedSince } : {}),
+        });
         let content: string | undefined;
         if (replacing) {
           const read = await readContent(deps, options, undefined, "内容.md");
@@ -354,7 +363,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
             data: [
               ...(Object.keys(patch).length ? [client.describe({ method: "PATCH", root: hub, path: documentPath(publicId), body: patch })] : []),
               ...(content !== undefined
-                ? [client.describe({ method: "PUT", root: hub, path: documentPath(publicId, "/content"), body: { content } })]
+                ? [client.describe({ method: "PUT", root: hub, path: documentPath(publicId, "/content"), body: contentBody(content) })]
                 : []),
             ],
             meta: { dryRun: true },
@@ -364,7 +373,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
         // Content first: if it fails, nothing else has changed. Visibility last,
         // so a document is never made public by a half-finished update.
         if (content !== undefined) {
-          await client.request({ method: "PUT", root: hub, path: documentPath(publicId, "/content"), body: { content } });
+          await client.request({ method: "PUT", root: hub, path: documentPath(publicId, "/content"), body: contentBody(content) });
         }
         let updated: DocSummary | undefined;
         if (Object.keys(patch).length) {

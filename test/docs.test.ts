@@ -112,7 +112,7 @@ describe("doc list / get / cat", () => {
   it("reads a text document's content", async () => {
     routes[`GET ${H}/documents/doc000000001/content`] = () => json({ content: "# 讲稿" });
     expect(await run(["doc", "cat", "doc000000001"])).toBe(0);
-    expect(lastOut().data).toEqual({ publicId: "doc000000001", content: "# 讲稿" });
+    expect(lastOut().data).toMatchObject({ publicId: "doc000000001", content: "# 讲稿" });
   });
 
   it("maps a refusal to the authorization exit code", async () => {
@@ -252,6 +252,16 @@ describe("doc +update", () => {
     expect(calls[0]!.body).toEqual({ content: "新内容" });
     expect(calls[1]!.body).toEqual({ title: "新", readable: false });
     expect(lastOut().data).toMatchObject({ contentReplaced: true, readable: false });
+  });
+
+  it("passes the time it was read at, so a stale save is refused by the Hub", async () => {
+    routes[`PUT ${H}/documents/doc000000001/content`] = () =>
+      json({ message: "这份文档在你打开之后被别人改过了，请刷新后再改" }, 409);
+    expect(
+      await run(["doc", "+update", "doc000000001", "--text", "x", "--if-unmodified-since", "2026-10-15T10:00:00.000Z"]),
+    ).toBe(6);
+    expect(calls[0]!.body).toEqual({ content: "x", expectedUpdatedAt: "2026-10-15T10:00:00.000Z" });
+    expect(await run(["doc", "+update", "doc000000001", "--title", "t", "--if-unmodified-since", "x"])).toBe(2);
   });
 
   it("rejects contradictory or empty updates before any request", async () => {
