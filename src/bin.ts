@@ -28,7 +28,12 @@ async function readStdin(): Promise<string> {
 
 /** For `mcp serve`: protocol messages on stdout, one per line, nothing else. */
 const stdio: Stdio = {
-  lines: createInterface({ input: process.stdin, crlfDelay: Infinity }),
+  // Created only when the MCP server asks for it. An open readline resumes
+  // stdin, which would keep every other command from exiting and would compete
+  // with the commands that read stdin themselves.
+  get lines() {
+    return createInterface({ input: process.stdin, crlfDelay: Infinity });
+  },
   write: (text) => void process.stdout.write(text),
 };
 

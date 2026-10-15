@@ -45,7 +45,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
 const files: FileAccess = {
   readFile: async (path) => {
     const bytes = disk.get(path);
-    if (!bytes) throw new Error(`no such file ${path}`);
+    if (!bytes) throw Object.assign(new Error(`no such file ${path}`), { code: "ENOENT" });
     return bytes;
   },
   writeFile: async (path, data) => void disk.set(path, data),
@@ -194,6 +194,41 @@ describe("doc +create", () => {
     routes[`POST ${H}/documents`] = () => json(doc());
     expect(await run(["doc", "+create", "--title", "a", "--text", "x"])).toBe(0);
     expect(calls[0]!.body).toMatchObject({ filename: "a.md" });
+  });
+
+  it("describes the whole upload sequence on --dry-run for a PDF, and sends nothing", async () => {
+    disk.set("/tmp/合同.pdf", new Uint8Array([1, 2, 3]));
+    expect(await run(["doc", "+create", "--title", "合同", "--file", "/tmp/合同.pdf", "--private", "--dry-run"])).toBe(0);
+    expect(calls).toHaveLength(0);
+    const steps = lastOut().data as unknown as { method: string; url: string; note?: string }[];
+    expect(steps.map((step) => step.method)).toEqual(["POST", "PUT", "POST"]);
+    expect(steps[0]!.url).toContain("/documents/uploads");
+    expect(steps[1]!.note).toContain("不带 API key");
+    expect(steps[2]!.url).toContain("/complete");
+  });
+
+  it("reports a missing local file as a not-found error with a hint, not a CLI bug", async () => {
+    expect(await run(["doc", "+create", "--title", "a", "--file", "/tmp/missing.md"])).toBe(5);
+    expect(lastErr().error).toMatchObject({ type: "not_found", subtype: "file_not_found" });
+    expect(String(lastErr().error.hint)).toContain("路径");
+  });
+
+  it("reports an unreadable local file as a validation error", async () => {
+    const denied = {
+      readFile: async () => {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      },
+      writeFile: async () => {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      },
+    };
+    expect(await run(["doc", "+create", "--title", "a", "--file", "/tmp/a.md"], { files: denied })).toBe(2);
+    expect(lastErr().error).toMatchObject({ subtype: "file_unusable" });
+    err = "";
+    routes[`GET ${H}/documents/doc000000001/download`] = () => json({ url: SIGNED, filename: "x.pdf" });
+    routes[`GET https://files.example.test/documents/abc.pdf`] = () => new Response(new Uint8Array([1]));
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/root/x.pdf"], { files: denied })).toBe(2);
+    expect(lastErr().error).toMatchObject({ subtype: "file_unusable" });
   });
 
   it("shows the request on --dry-run without sending it", async () => {

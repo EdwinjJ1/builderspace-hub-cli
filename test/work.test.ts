@@ -44,7 +44,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
 const files: FileAccess = {
   readFile: async (path) => {
     const bytes = disk.get(path);
-    if (!bytes) throw new Error(`no such file ${path}`);
+    if (!bytes) throw Object.assign(new Error(`no such file ${path}`), { code: "ENOENT" });
     return bytes;
   },
   writeFile: async (path, data) => void disk.set(path, data),
@@ -236,6 +236,24 @@ describe("labels and checklists", () => {
     expect(writes()).toHaveLength(0);
   });
 
+  it("reports a label that flipped the wrong way instead of claiming success", async () => {
+    routes[`PUT ${H}/cards/cardA0000001/labels/labl00000001`] = () => json({ newLabel: false });
+    expect(await run(["task", "+label", "cardA0000001", "--label", "紧急"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ subtype: "changed_meanwhile" });
+  });
+
+  it("says what exists when a checklist item fails half-way", async () => {
+    routes[`POST ${H}/cards/cardA0000001/checklists`] = () => json({ publicId: "chkl00000001" });
+    let n = 0;
+    routes[`POST ${H}/checklists/chkl00000001/items`] = () =>
+      ++n === 2 ? json({ message: "boom" }, 500) : json({ publicId: `item0000000${n}` });
+    expect(await run(["task", "+checklist", "cardA0000001", "--name", "上线前", "--item", "一", "--item", "二", "--item", "三"])).toBe(9);
+    expect(lastErr().error).toMatchObject({ subtype: "checklist_incomplete" });
+    const hint = String(lastErr().error.hint);
+    expect(hint).toContain("chkl00000001");
+    expect(hint).toContain("不要重跑");
+  });
+
   it("creates a checklist with its items", async () => {
     routes[`POST ${H}/cards/cardA0000001/checklists`] = () => json({ publicId: "chkl00000001" });
     let n = 0;
@@ -318,6 +336,11 @@ describe("export and import", () => {
     file({ title: "不是数组" });
     expect(await run(["task", "+import", "--board", "boardA000001", "--file", "/tmp/tasks.json"])).toBe(2);
     expect(writes()).toHaveLength(0);
+  });
+
+  it("tells a missing import file apart from a bad one", async () => {
+    expect(await run(["task", "+import", "--board", "boardA000001", "--file", "/tmp/nope.json"])).toBe(5);
+    expect(lastErr().error).toMatchObject({ subtype: "file_not_found" });
   });
 
   it("--dry-run lists the plan without creating", async () => {

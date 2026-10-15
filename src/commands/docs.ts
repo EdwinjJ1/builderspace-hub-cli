@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import type { HubClient } from "../core/client.js";
 import type { Deps, FileAccess } from "../core/runtime.js";
 import { CliError, validationError } from "../core/errors.js";
+import { readLocalFile, writeLocalFile } from "../core/files.js";
 import { action, requireValue } from "../core/runtime.js";
 
 /**
@@ -83,7 +84,7 @@ async function readContent(deps: Deps, flags: ContentFlags, filenameFlag: string
 
   if (flags.file !== undefined) {
     const filename = filenameFlag ?? basename(flags.file);
-    return { filename, bytes: await files.readFile(flags.file) };
+    return { filename, bytes: await readLocalFile(files, flags.file) };
   }
   const text = flags.text !== undefined ? flags.text : await deps.readStdin();
   return { filename: filenameFlag ?? fallbackName, bytes: new TextEncoder().encode(text) };
@@ -251,15 +252,36 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
         const readable = !options.private;
 
         if (options.dryRun) {
-          return {
-            data: client.describe({
-              method: "POST",
-              root: hub,
-              path: "/documents",
-              body: { title, filename, readable, bytes: bytes.byteLength, ...(isText(filename) ? {} : { via: "upload" }) },
-            }),
-            meta: { dryRun: true },
+          const common = {
+            title,
+            ...(options.description ? { description: options.description } : {}),
+            ...(options.folder ? { folderPublicId: options.folder } : {}),
+            readable,
           };
+          const data = isText(filename)
+            ? [
+                client.describe({
+                  method: "POST",
+                  root: hub,
+                  path: "/documents",
+                  body: { ...common, filename, content: textOrFail(bytes, filename) },
+                }),
+              ]
+            : [
+                client.describe({ method: "POST", root: hub, path: "/documents/uploads", body: { filename, size: bytes.byteLength } }),
+                {
+                  method: "PUT",
+                  url: "<上一步返回的签名上传链接>",
+                  note: `发送 ${bytes.byteLength} 字节的文件内容；不带 API key`,
+                },
+                client.describe({
+                  method: "POST",
+                  root: hub,
+                  path: "/documents/uploads/<上一步返回的 uploadId>/complete",
+                  body: common,
+                }),
+              ];
+          return { data, meta: { dryRun: true } };
         }
         const created = await createDocument(client, {
           title,
@@ -368,7 +390,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
           path: documentPath(publicId, "/download"),
         });
         const bytes = await client.fetchBytes(link.url);
-        await (deps.files ?? nodeFiles).writeFile(options.out, bytes);
+        await writeLocalFile(deps.files ?? nodeFiles, options.out, bytes);
         return { data: { publicId, filename: link.filename, out: options.out, size: bytes.byteLength } };
       }),
     );

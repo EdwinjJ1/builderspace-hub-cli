@@ -5,6 +5,7 @@ import type { HubClient } from "../core/client.js";
 import type { Deps, FileAccess } from "../core/runtime.js";
 import type { BoardDetail, Card, CardDetail, Member } from "./resources.js";
 import { CliError, validationError } from "../core/errors.js";
+import { readLocalFile, writeLocalFile } from "../core/files.js";
 import { action, requireValue } from "../core/runtime.js";
 import { parseDueDate, stageNames, stageOf } from "../core/stages.js";
 import { dueFlag, getBoard, getCard, memberName, resolveList, taskView } from "./resources.js";
@@ -366,7 +367,15 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
           path: `/cards/${enc(card.publicId)}/labels/${enc(label.publicId)}`,
         };
         if (options.dryRun) return { data: client.describe(spec), meta: { dryRun: true } };
-        await client.request(spec);
+        const response = await client.request<{ newLabel?: boolean }>(spec);
+        if (response?.newLabel !== wanted) {
+          throw new CliError({
+            type: "conflict",
+            subtype: "changed_meanwhile",
+            message: "这个任务的标签刚被别人改过，结果和预期相反",
+            hint: `重新看一眼：bshub task +get ${card.publicId}`,
+          });
+        }
         return { data: { ...result, changed: true, labelled: wanted } };
       }),
     );
@@ -399,12 +408,24 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
         const checklist = await client.request<{ publicId: string }>(create);
         const items: { publicId: string; title: string }[] = [];
         for (const title of options.item) {
-          const item = await client.request<{ publicId: string }>({
-            method: "POST",
-            path: `/checklists/${enc(checklist.publicId)}/items`,
-            body: { title },
-          });
-          items.push({ publicId: item.publicId, title });
+          try {
+            const item = await client.request<{ publicId: string }>({
+              method: "POST",
+              path: `/checklists/${enc(checklist.publicId)}/items`,
+              body: { title },
+            });
+            items.push({ publicId: item.publicId, title });
+          } catch (error) {
+            const cause = error instanceof CliError ? error : undefined;
+            throw new CliError({
+              type: cause?.type ?? "api",
+              subtype: "checklist_incomplete",
+              message: `清单「${options.name.trim()}」建好了，但条目「${title}」没加上：${error instanceof Error ? error.message : String(error)}`,
+              hint: `清单 ${checklist.publicId} 已存在，里面有 ${items.length} 个条目。不要重跑整条命令（会再建一个清单）；用网页补上剩下的 ${options.item.length - items.length} 个条目。`,
+              status: cause?.status,
+              retryable: false,
+            });
+          }
         }
         return { data: { publicId: checklist.publicId, name: options.name.trim(), items } };
       }),
@@ -542,7 +563,7 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
         }
         const snapshot = { exportedAt: new Date().toISOString(), project: options.project, boards };
         if (options.out) {
-          await (deps.files ?? nodeFiles).writeFile(options.out, new TextEncoder().encode(`${JSON.stringify(snapshot, null, 2)}\n`));
+          await writeLocalFile(deps.files ?? nodeFiles, options.out, new TextEncoder().encode(`${JSON.stringify(snapshot, null, 2)}\n`));
           return { data: { out: options.out, boards: boards.length, tasks } };
         }
         return { data: snapshot, meta: { boards: boards.length, tasks } };
@@ -557,7 +578,7 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
     .option("--dry-run", "只检查文件、列出会新建的任务，不真的新建")
     .action(
       action<{ board: string; file: string; dryRun?: boolean }>(deps, exit, async (runtime, _args, options) => {
-        const text = new TextDecoder().decode(await (deps.files ?? nodeFiles).readFile(options.file));
+        const text = new TextDecoder().decode(await readLocalFile(deps.files ?? nodeFiles, options.file));
         const items = parseImport(text);
         const client = await runtime.client();
         const detail = await getBoard(client, options.board);
