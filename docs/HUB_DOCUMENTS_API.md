@@ -18,7 +18,7 @@
 | --- | --- |
 | `GET /documents?folder=&search=` | `{ folders: [{publicId, name, parentPublicId}], documents: [Document] }` |
 | `GET /documents/{id}` | `Document` |
-| `GET /documents/{id}/content` | `{ content, updatedAt }`，只给文本格式（md / txt / csv / json / html），上限 1 MB；其他格式 400 |
+| `GET /documents/{id}/content` | `{ content, updatedAt }`，只给文本格式（md / txt / csv / json / html），上限 400 KB；其他格式 400 |
 | `GET /documents/{id}/download` | `{ url, filename }`，短时有效的签名链接 |
 | `POST /documents` | 直接新建文本文档：`{ title, filename, content, description?, folderPublicId?, readable? }` → `Document` |
 | `POST /documents/uploads` | 为二进制文件申请上传：`{ filename, size }` → `{ uploadId, url, method: "PUT", headers? }` |

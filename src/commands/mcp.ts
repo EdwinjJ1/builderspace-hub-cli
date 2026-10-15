@@ -189,7 +189,7 @@ export const tools: Tool[] = [
     defaults: { private: true },
     params: {
       title: text("标题", { required: true, maxLength: 120 }),
-      text: text("文档内容（UTF-8 文本）", { required: true, maxLength: 1_000_000 }),
+      text: text("文档内容（UTF-8 文本）", { required: true, maxLength: 400_000 }),
       filename: text("文件名，决定格式（md / txt / csv / json / html），默认「标题.md」", { maxLength: 200 }),
       description: text("说明", { maxLength: 500 }),
       folder: id("放进哪个文件夹 publicId", false),
@@ -208,7 +208,7 @@ export const tools: Tool[] = [
       folder: id("移到这个文件夹", false),
       private: flag("设为不可读"),
       public: flag("设为所有登录的人可读"),
-      text: text("替换文本内容", { maxLength: 1_000_000 }),
+      text: text("替换文本内容", { maxLength: 400_000 }),
     },
   },
 ];
