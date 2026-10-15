@@ -30,10 +30,11 @@
 | 命令 | 说明 | 状态 |
 | --- | --- | --- |
 | `project list` | 我加入的项目 | ✅ |
-| `project get <id>` | 项目详情和成员 | 🔜 |
+| `project get <id>` | 项目详情和成员 | ✅ |
 | `board list --project <id>` | 项目里的看板和列 | ✅ |
 | `board get <id>` | 看板的列和每列任务数 | ✅ |
-| `board +overall --project <id>` | 总版：开发 / 运营 / 营销的全部任务 | 🔜 需要 Hub 接口 |
+| `board +overall --project <id> [--stage]` | 总版：开发 / 运营 / 营销的全部任务。在客户端逐块看板汇总，不需要新接口 | ✅ |
+| `label list --board <id>` | 看板上的标签 | ✅ |
 
 ## 任务
 
@@ -46,11 +47,38 @@
 | `task +due <id> --date YYYY-MM-DD \| --clear` | 截止日期 | ✅ |
 | `task +comment <id> --text` | 评论 | ✅ |
 | `task +search --project --query` | 搜索 | ✅ |
-| `task +mine` / `+due-soon` / `+overdue` | 跨项目的我的任务、即将到期、已逾期 | 🔜 需要 Hub 接口 |
-| `task +assign <id> --member` / `+unassign` | 指派 | 🔜 |
-| `task +label <id> --label` | 标签 | 🔜 |
-| `task +checklist …` | 检查清单 | 🗓 |
+| `task +mine [--project] [--include-done]` | 跨项目的我的任务，按截止日期排序 | ✅ |
+| `task +due-soon [--days 7] [--project] [--all]` | 快到期的 | ✅ |
+| `task +overdue [--project] [--all]` | 已逾期且没完成的 | ✅ |
+| `task +update <id> [--title] [--description]` | 改标题或说明 | ✅ |
+| `task +delete <id> --yes` | 删除（不可撤销，必须带 `--yes`） | ✅ |
+| `task +assign <id> --member <邮箱\|名字\|me>` / `+unassign` | 指派 / 取消指派；已经是目标状态时什么也不做 | ✅ |
+| `task +activity <id>` | 变更记录 | ✅ |
+| `task +label <id> --label <名字> [--remove]` | 加 / 去掉标签 | ✅ |
+| `task +checklist <id> --name [--item …]` | 新建检查清单和条目 | ✅ |
+| `task +check <itemId> [--undo]` | 勾选 / 取消勾选条目 | ✅ |
+| `task +import --board --file tasks.json [--dry-run]` | 从 JSON 批量新建任务；先整体检查，再逐个新建，中途失败会说从哪一项补 | ✅ |
 | `task +run <id> --agent claude\|codex` | 把任务交给本机的 Claude Code / Codex（[AI_CHANNEL.md](AI_CHANNEL.md)） | 🗓 |
+
+## 数据
+
+| 命令 | 说明 | 状态 |
+| --- | --- | --- |
+| `export --project <id> [--out file]` | 导出一个项目的看板、列、任务（含标签、指派人、截止日期），备份用 | ✅ |
+
+## 文档库
+
+文档走 Hub 自己的接口 `/api/hub/v1/documents`，约定见 [HUB_DOCUMENTS_API.md](HUB_DOCUMENTS_API.md)。
+
+| 命令 | 说明 | 状态 |
+| --- | --- | --- |
+| `doc list [--folder] [--search]` | 一个文件夹的内容（不指定是最上层），或搜索 | ✅ |
+| `doc get <id>` / `doc cat <id>` | 详情 / 文本文档的内容和 `updatedAt` | ✅ |
+| `doc +create --title [--file \| --text \| --stdin] [--filename] [--folder] [--private]` | 新建。md / txt / csv / json / html 直接发文本；PDF、PPT 等先上传再完成 | ✅ |
+| `doc +update <id> [--title] [--description] [--folder] [--private\|--public] [--file \| --text \| --stdin] [--if-unmodified-since <updatedAt>]` | 改信息、可读性，或换掉文本内容。设为不可读会先于写入新文本；`--if-unmodified-since` 防止覆盖别人的修改（不能和改信息一起用） | ✅ |
+| `doc +download <id> --out <path>` | 下载到本地 | ✅ |
+| `doc folder +create --name [--parent]` | 新建文件夹 | ✅ |
+| 删除文档、分配编辑权限 | **只能在网页里做。** API key 还没有权限范围，key 泄露时不能删文件或转让编辑权，所以刻意不开放，等带范围的 key（v0.3）再说 | — |
 
 ## 后台（需要后台角色）
 
@@ -65,6 +93,6 @@
 
 | 命令 | 说明 | 状态 |
 | --- | --- | --- |
-| `mcp serve` | 以 MCP 服务器的形式暴露命令 | 🗓 |
+| `mcp serve [--read-only]` | 以 MCP 服务器的形式暴露常用命令，见 [MCP.md](MCP.md) | ✅ |
 | `event +watch` | 订阅任务事件 | 🗓 |
 | `skill list/show` | 查看内置 Agent Skills | 🗓 |

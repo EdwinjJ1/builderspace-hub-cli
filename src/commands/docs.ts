@@ -1,0 +1,461 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
+import type { Command } from "commander";
+
+import type { HubClient } from "../core/client.js";
+import type { Deps, FileAccess } from "../core/runtime.js";
+import { CliError, validationError } from "../core/errors.js";
+import { readLocalFile, writeLocalFile } from "../core/files.js";
+import { action, requireValue } from "../core/runtime.js";
+
+/**
+ * The document library: contracts, decks, scripts. These are the Hub's own
+ * REST endpoints (`/api/hub/v1/documents`), not Kan's.
+ *
+ * Reading, creating and editing work from the CLI. Deleting a document and
+ * handing out edit rights stay in the web app on purpose: an API key has no
+ * scope yet (docs/DESIGN.md), so a leaked key must not be able to remove files
+ * or pass on the right to change them.
+ */
+
+const hub = "hub" as const;
+
+interface DocSummary {
+  publicId: string;
+  title: string;
+  description?: string | null;
+  filename: string;
+  ext: string;
+  size: number;
+  folderPublicId?: string | null;
+  readable: boolean;
+  canEdit?: boolean;
+  updatedAt?: string;
+}
+
+interface Folder {
+  publicId: string;
+  name: string;
+  parentPublicId?: string | null;
+}
+
+interface Upload {
+  uploadId: string;
+  url: string;
+  method?: "PUT";
+  headers?: Record<string, string>;
+}
+
+/** Formats the Hub stores as text, so they travel as JSON rather than as an upload. */
+const TEXT_EXTENSIONS = new Set(["md", "txt", "csv", "json", "html", "htm"]);
+
+const extensionOf = (filename: string) => extname(filename).slice(1).toLowerCase();
+const isText = (filename: string) => TEXT_EXTENSIONS.has(extensionOf(filename));
+
+const nodeFiles: FileAccess = { readFile, writeFile };
+
+const docView = (doc: DocSummary) => ({
+  publicId: doc.publicId,
+  title: doc.title,
+  filename: doc.filename,
+  size: doc.size,
+  folder: doc.folderPublicId ?? null,
+  readable: doc.readable,
+  canEdit: doc.canEdit ?? null,
+  updatedAt: doc.updatedAt ?? null,
+  ...(doc.description ? { description: doc.description } : {}),
+});
+
+const documentPath = (publicId: string, tail = "") => `/documents/${encodeURIComponent(publicId)}${tail}`;
+
+interface ContentFlags {
+  file?: string;
+  text?: string;
+  stdin?: boolean;
+}
+
+/** Where a document's content comes from: exactly one of --file, --text, --stdin. */
+async function readContent(deps: Deps, flags: ContentFlags, filenameFlag: string | undefined, fallbackName: string) {
+  const given = [flags.file, flags.text, flags.stdin].filter((value) => value !== undefined && value !== false);
+  if (given.length !== 1) {
+    throw validationError("内容要从 --file、--text、--stdin 里选一个", "file");
+  }
+  const files = deps.files ?? nodeFiles;
+
+  if (flags.file !== undefined) {
+    const filename = filenameFlag ?? basename(flags.file);
+    return { filename, bytes: await readLocalFile(files, flags.file) };
+  }
+  const text = flags.text !== undefined ? flags.text : await deps.readStdin();
+  return { filename: filenameFlag ?? fallbackName, bytes: new TextEncoder().encode(text) };
+}
+
+const utf8 = (bytes: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+
+function textOrFail(bytes: Uint8Array, filename: string): string {
+  try {
+    return utf8(bytes);
+  } catch {
+    throw validationError(`${filename} 不是 UTF-8 文本`, "file", "文本格式的文档请先转成 UTF-8。");
+  }
+}
+
+/** A document that was meant to be private but came back readable by everyone. */
+function notPrivate(publicId: string) {
+  return new CliError({
+    type: "api",
+    subtype: "not_private",
+    message: `文档 ${publicId} 没能设成仅管理者可见，它现在对所有登录的人可见`,
+    hint: `马上在网页里把它设为不可读，或运行 bshub doc +update ${publicId} --private。`,
+  });
+}
+
+/** Creates the document, then makes sure a private one really is private. */
+async function createDocument(
+  client: HubClient,
+  input: {
+    title: string;
+    description?: string;
+    folder?: string;
+    readable: boolean;
+    filename: string;
+    bytes: Uint8Array;
+  },
+): Promise<DocSummary> {
+  const common = {
+    title: input.title,
+    ...(input.description ? { description: input.description } : {}),
+    ...(input.folder ? { folderPublicId: input.folder } : {}),
+    readable: input.readable,
+  };
+
+  let created: DocSummary;
+  if (isText(input.filename)) {
+    created = await client.request<DocSummary>({
+      method: "POST",
+      root: hub,
+      path: "/documents",
+      body: { ...common, filename: input.filename, content: textOrFail(input.bytes, input.filename) },
+    });
+  } else {
+    const upload = await client.request<Upload>({
+      method: "POST",
+      root: hub,
+      path: "/documents/uploads",
+      body: { filename: input.filename, size: input.bytes.byteLength },
+    });
+    await client.sendBytes({ method: "PUT", url: upload.url, body: input.bytes, headers: upload.headers });
+    created = await client.request<DocSummary>({
+      method: "POST",
+      root: hub,
+      path: `/documents/uploads/${encodeURIComponent(upload.uploadId)}/complete`,
+      body: common,
+    });
+  }
+
+  if (!input.readable && created.readable !== false) {
+    // An older Hub may ignore the flag. Close the gap now rather than trust it.
+    const fixed = await client.request<DocSummary>({
+      method: "PATCH",
+      root: hub,
+      path: documentPath(created.publicId),
+      body: { readable: false },
+    });
+    if (fixed.readable !== false) throw notPrivate(created.publicId);
+    return fixed;
+  }
+  return created;
+}
+
+export function registerDocs(program: Command, deps: Deps, exit: { code: number }) {
+  const doc = program.command("doc").description("文档库：合同、PPT、讲稿等。带 + 的是快捷命令");
+
+  doc
+    .command("list")
+    .description("一个文件夹里的文档和子文件夹（不指定就是最上层），或搜索结果")
+    .option("--folder <publicId>", "文件夹的 publicId")
+    .option("--search <text>", "按标题搜索")
+    .action(
+      action<{ folder?: string; search?: string }>(deps, exit, async (runtime, _args, options) => {
+        const result = await (await runtime.client()).request<{ folders?: Folder[]; documents: DocSummary[] }>({
+          method: "GET",
+          root: hub,
+          path: "/documents",
+          query: { folder: options.folder, search: options.search },
+        });
+        const documents = result.documents.map(docView);
+        return {
+          data: { folders: result.folders ?? [], documents },
+          meta: { count: documents.length },
+        };
+      }),
+    );
+
+  doc
+    .command("get")
+    .description("一份文档的详情（不含内容，看内容用 cat）")
+    .argument("<publicId>", "文档的 publicId")
+    .action(
+      action(deps, exit, async (runtime, args) => {
+        const detail = await (await runtime.client()).request<DocSummary>({
+          method: "GET",
+          root: hub,
+          path: documentPath(requireValue(args[0], "<publicId>")),
+        });
+        return { data: docView(detail) };
+      }),
+    );
+
+  doc
+    .command("cat")
+    .description("一份文本文档（md / txt / csv / json / html）的内容")
+    .argument("<publicId>", "文档的 publicId")
+    .action(
+      action(deps, exit, async (runtime, args) => {
+        const publicId = requireValue(args[0], "<publicId>");
+        const result = await (await runtime.client()).request<{ content: string; updatedAt?: string }>({
+          method: "GET",
+          root: hub,
+          path: documentPath(publicId, "/content"),
+        });
+        return { data: { publicId, content: result.content, updatedAt: result.updatedAt ?? null } };
+      }),
+    );
+
+  doc
+    .command("+create")
+    .description("新建文档：文本从 --file / --text / --stdin 来；PDF、PPT 等从 --file 来")
+    .requiredOption("--title <title>", "标题")
+    .option("--file <path>", "本地文件")
+    .option("--text <text>", "直接给文本内容（文件名默认是「标题.md」，可用 --filename 改）")
+    .option("--stdin", "从标准输入读文本内容")
+    .option("--filename <name>", "文件名，决定格式，例如 讲稿.md；用 --file 时默认取文件本身的名字")
+    .option("--description <text>", "说明")
+    .option("--folder <publicId>", "放进哪个文件夹（默认最上层）")
+    .option("--private", "不可读：只有所有者和编辑者看得到（默认所有登录的人都能读）")
+    .option("--dry-run", "只打印将要发出的请求")
+    .action(
+      action<{
+        title: string;
+        file?: string;
+        text?: string;
+        stdin?: boolean;
+        filename?: string;
+        description?: string;
+        folder?: string;
+        private?: boolean;
+        dryRun?: boolean;
+      }>(deps, exit, async (runtime, _args, options) => {
+        const title = requireValue(options.title.trim(), "--title");
+        const { filename, bytes } = await readContent(deps, options, options.filename, `${title.replace(/[\\/]/g, "-")}.md`);
+        if (!isText(filename) && options.file === undefined) {
+          throw validationError(
+            `${filename} 不是文本格式，内容要从 --file 给（--text / --stdin 只用于 md、txt、csv、json、html）`,
+            "filename",
+          );
+        }
+        const client = await runtime.client();
+        const readable = !options.private;
+
+        if (options.dryRun) {
+          const common = {
+            title,
+            ...(options.description ? { description: options.description } : {}),
+            ...(options.folder ? { folderPublicId: options.folder } : {}),
+            readable,
+          };
+          const data = isText(filename)
+            ? [
+                client.describe({
+                  method: "POST",
+                  root: hub,
+                  path: "/documents",
+                  body: { ...common, filename, content: textOrFail(bytes, filename) },
+                }),
+              ]
+            : [
+                client.describe({ method: "POST", root: hub, path: "/documents/uploads", body: { filename, size: bytes.byteLength } }),
+                {
+                  method: "PUT",
+                  url: "<上一步返回的签名上传链接>",
+                  note: `发送 ${bytes.byteLength} 字节的文件内容；不带 API key`,
+                },
+                client.describe({
+                  method: "POST",
+                  root: hub,
+                  path: "/documents/uploads/<上一步返回的 uploadId>/complete",
+                  body: common,
+                }),
+              ];
+          return { data, meta: { dryRun: true } };
+        }
+        const created = await createDocument(client, {
+          title,
+          description: options.description,
+          folder: options.folder,
+          readable,
+          filename,
+          bytes,
+        });
+        return { data: docView(created) };
+      }),
+    );
+
+  doc
+    .command("+update")
+    .description("改标题、说明、文件夹、可读性，或换掉文本内容")
+    .argument("<publicId>", "文档的 publicId")
+    .option("--title <title>", "新标题")
+    .option("--description <text>", "新说明")
+    .option("--folder <publicId>", "移到这个文件夹")
+    .option("--private", "设为不可读")
+    .option("--public", "设为所有登录的人可读")
+    .option("--file <path>", "用这个文本文件的内容替换")
+    .option("--text <text>", "用这段文本替换")
+    .option("--stdin", "用标准输入的文本替换")
+    .option("--if-unmodified-since <updatedAt>", "替换内容时：只有文档的更新时间还是这个值才保存（用 doc cat 拿到的 updatedAt），否则报冲突，避免覆盖别人的修改")
+    .option("--dry-run", "只打印将要发出的请求")
+    .action(
+      action<{
+        title?: string;
+        description?: string;
+        folder?: string;
+        private?: boolean;
+        public?: boolean;
+        file?: string;
+        text?: string;
+        stdin?: boolean;
+        ifUnmodifiedSince?: string;
+        dryRun?: boolean;
+      }>(deps, exit, async (runtime, args, options) => {
+        const publicId = requireValue(args[0], "<publicId>");
+        if (options.ifUnmodifiedSince && options.file === undefined && options.text === undefined && !options.stdin) {
+          throw validationError("--if-unmodified-since 只在替换内容时有意义", "if-unmodified-since");
+        }
+        if (options.private && options.public) throw validationError("--private 和 --public 二选一", "private");
+
+        const patch = {
+          ...(options.title !== undefined ? { title: requireValue(options.title.trim(), "--title") } : {}),
+          ...(options.description !== undefined ? { description: options.description } : {}),
+          ...(options.folder !== undefined ? { folderPublicId: options.folder } : {}),
+          ...(options.private ? { readable: false } : {}),
+          ...(options.public ? { readable: true } : {}),
+        };
+        const replacing = options.file !== undefined || options.text !== undefined || options.stdin;
+        if (options.ifUnmodifiedSince && Object.keys(patch).length > 0) {
+          // Changing details advances the document's update time, which would make the check fail against our own change.
+          throw validationError(
+            "--if-unmodified-since 不能和 --title / --description / --folder / --private / --public 一起用",
+            "if-unmodified-since",
+            "先改信息，再用 doc cat 重新拿 updatedAt，单独替换内容。",
+          );
+        }
+        if (Object.keys(patch).length === 0 && !replacing) {
+          throw validationError("没有要改的内容：给至少一个 --title / --description / --folder / --private / --public / 内容来源", "title");
+        }
+
+        const client = await runtime.client();
+        const contentBody = (text: string) => ({
+          content: text,
+          ...(options.ifUnmodifiedSince ? { expectedUpdatedAt: options.ifUnmodifiedSince } : {}),
+        });
+        let content: string | undefined;
+        if (replacing) {
+          const read = await readContent(deps, options, undefined, "内容.md");
+          if (options.file !== undefined && !isText(read.filename)) {
+            throw validationError(
+              "命令行目前只能替换文本文档的内容（md / txt / csv / json / html）",
+              "file",
+              "PDF、PPT 等请在网页里替换文件。",
+            );
+          }
+          content = textOrFail(read.bytes, read.filename);
+        }
+
+        // The order matters for exposure. Going private happens first, so new
+        // text is never written into a document that is still readable by
+        // everyone. Anything else writes the content first and the visibility
+        // last, so a half-finished update never makes a document public.
+        const patching = Object.keys(patch).length > 0;
+        const privateFirst = patch.readable === false;
+        const steps = [
+          ...(patching ? [{ name: "patch" as const, spec: { method: "PATCH" as const, root: hub, path: documentPath(publicId), body: patch } }] : []),
+          ...(content !== undefined
+            ? [{ name: "content" as const, spec: { method: "PUT" as const, root: hub, path: documentPath(publicId, "/content"), body: contentBody(content) } }]
+            : []),
+        ];
+        if (!privateFirst) steps.reverse();
+
+        if (options.dryRun) {
+          return { data: steps.map((step) => client.describe(step.spec)), meta: { dryRun: true } };
+        }
+
+        let updated: DocSummary | undefined;
+        for (const step of steps) {
+          if (step.name === "content") {
+            await client.request(step.spec);
+            updated = undefined; // size and updatedAt changed: read it again below
+            continue;
+          }
+          updated = await client.request<DocSummary>(step.spec);
+          // Never write new text into a document that was meant to go private
+          // but is still readable: check before the content step runs.
+          if (patch.readable === false && updated.readable !== false) throw notPrivate(publicId);
+        }
+        updated ??= await client.request<DocSummary>({ method: "GET", root: hub, path: documentPath(publicId) });
+        return { data: { ...docView(updated), ...(content !== undefined ? { contentReplaced: true } : {}) } };
+      }),
+    );
+
+  doc
+    .command("+download")
+    .description("把一份文档下载到本地")
+    .argument("<publicId>", "文档的 publicId")
+    .requiredOption("--out <path>", "保存到哪里")
+    .option("--dry-run", "只打印将要发出的请求，不下载、不写本地文件")
+    .action(
+      action<{ out: string; dryRun?: boolean }>(deps, exit, async (runtime, args, options) => {
+        const publicId = requireValue(args[0], "<publicId>");
+        const client = await runtime.client();
+        if (options.dryRun) {
+          return {
+            data: [
+              client.describe({ method: "GET", root: hub, path: documentPath(publicId, "/download") }),
+              { method: "GET", url: "<上一步返回的签名下载链接>", note: `把内容写到 ${options.out}（已有同名文件会被覆盖）；不带 API key` },
+            ],
+            meta: { dryRun: true },
+          };
+        }
+        const link = await client.request<{ url: string; filename: string }>({
+          method: "GET",
+          root: hub,
+          path: documentPath(publicId, "/download"),
+        });
+        const bytes = await client.fetchBytes(link.url);
+        await writeLocalFile(deps.files ?? nodeFiles, options.out, bytes);
+        return { data: { publicId, filename: link.filename, out: options.out, size: bytes.byteLength } };
+      }),
+    );
+
+  doc
+    .command("folder")
+    .description("文件夹")
+    .command("+create")
+    .description("新建文件夹")
+    .requiredOption("--name <name>", "文件夹名")
+    .option("--parent <publicId>", "放在哪个文件夹里（默认最上层，最多三层）")
+    .option("--dry-run", "只打印将要发出的请求")
+    .action(
+      action<{ name: string; parent?: string; dryRun?: boolean }>(deps, exit, async (runtime, _args, options) => {
+        const client = await runtime.client();
+        const spec = {
+          method: "POST" as const,
+          root: hub,
+          path: "/documents/folders",
+          body: { name: requireValue(options.name.trim(), "--name"), ...(options.parent ? { parentPublicId: options.parent } : {}) },
+        };
+        if (options.dryRun) return { data: client.describe(spec), meta: { dryRun: true } };
+        return { data: await client.request<Folder>(spec) };
+      }),
+    );
+}

@@ -51,9 +51,16 @@ bshub board list --project <项目 publicId> -f table
 bshub task +list --board <看板 publicId> --stage 待办 -f table
 bshub task +create --board <看板 publicId> --title "写周报" --due 2026-10-20 --assign-me
 bshub task +move <任务 publicId> --to 进行中
+bshub task +mine              # 指派给我的、跨所有项目
+bshub task +due-soon --days 3
+
+# 文档库：把讲稿放进 Hub，只让所有者和编辑者看到
+bshub doc +create --title "讲稿" --file 讲稿.md --private
 ```
 
 **给 AI Agent**：用环境变量 `BSHUB_URL` 和 `BSHUB_API_KEY`，不需要配置文件；先读 [skills/bshub-shared/SKILL.md](skills/bshub-shared/SKILL.md)。
+
+要让 Claude Code、Codex 等直接把任务和文档当工具用：`bshub mcp serve`（只读加 `--read-only`），见 [docs/MCP.md](docs/MCP.md)。
 
 ## 三层命令
 

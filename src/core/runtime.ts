@@ -14,6 +14,18 @@ import { formats, printError, printSuccess } from "./output.js";
  * temporary config directory and captured output.
  */
 
+/** Local files, injected so tests need no disk. Defaults to Node's. */
+export interface FileAccess {
+  readFile(path: string): Promise<Uint8Array>;
+  writeFile(path: string, data: Uint8Array): Promise<void>;
+}
+
+/** A line-by-line conversation on stdin/stdout, for the MCP server. */
+export interface Stdio {
+  lines: AsyncIterable<string>;
+  write(text: string): void;
+}
+
 export interface Deps {
   writer: Writer;
   env: Record<string, string | undefined>;
@@ -22,6 +34,8 @@ export interface Deps {
   readSecret: (prompt: string) => Promise<string>;
   readStdin: () => Promise<string>;
   isInteractive: boolean;
+  files?: FileAccess;
+  stdio?: Stdio;
 }
 
 export interface GlobalOptions {
