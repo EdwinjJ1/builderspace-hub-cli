@@ -248,6 +248,12 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
       }>(deps, exit, async (runtime, _args, options) => {
         const title = requireValue(options.title.trim(), "--title");
         const { filename, bytes } = await readContent(deps, options, options.filename, `${title.replace(/[\\/]/g, "-")}.md`);
+        if (!isText(filename) && options.file === undefined) {
+          throw validationError(
+            `${filename} 不是文本格式，内容要从 --file 给（--text / --stdin 只用于 md、txt、csv、json、html）`,
+            "filename",
+          );
+        }
         const client = await runtime.client();
         const readable = !options.private;
 
@@ -358,26 +364,28 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
           content = textOrFail(read.bytes, read.filename);
         }
 
+        // The order matters for exposure. Going private happens first, so new
+        // text is never written into a document that is still readable by
+        // everyone. Anything else writes the content first and the visibility
+        // last, so a half-finished update never makes a document public.
+        const patching = Object.keys(patch).length > 0;
+        const privateFirst = patch.readable === false;
+        const steps = [
+          ...(patching ? [{ name: "patch" as const, spec: { method: "PATCH" as const, root: hub, path: documentPath(publicId), body: patch } }] : []),
+          ...(content !== undefined
+            ? [{ name: "content" as const, spec: { method: "PUT" as const, root: hub, path: documentPath(publicId, "/content"), body: contentBody(content) } }]
+            : []),
+        ];
+        if (!privateFirst) steps.reverse();
+
         if (options.dryRun) {
-          return {
-            data: [
-              ...(Object.keys(patch).length ? [client.describe({ method: "PATCH", root: hub, path: documentPath(publicId), body: patch })] : []),
-              ...(content !== undefined
-                ? [client.describe({ method: "PUT", root: hub, path: documentPath(publicId, "/content"), body: contentBody(content) })]
-                : []),
-            ],
-            meta: { dryRun: true },
-          };
+          return { data: steps.map((step) => client.describe(step.spec)), meta: { dryRun: true } };
         }
 
-        // Content first: if it fails, nothing else has changed. Visibility last,
-        // so a document is never made public by a half-finished update.
-        if (content !== undefined) {
-          await client.request({ method: "PUT", root: hub, path: documentPath(publicId, "/content"), body: contentBody(content) });
-        }
         let updated: DocSummary | undefined;
-        if (Object.keys(patch).length) {
-          updated = await client.request<DocSummary>({ method: "PATCH", root: hub, path: documentPath(publicId), body: patch });
+        for (const step of steps) {
+          if (step.name === "patch") updated = await client.request<DocSummary>(step.spec);
+          else await client.request(step.spec);
         }
         updated ??= await client.request<DocSummary>({ method: "GET", root: hub, path: documentPath(publicId) });
         return { data: { ...docView(updated), ...(content !== undefined ? { contentReplaced: true } : {}) } };
@@ -389,10 +397,20 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
     .description("把一份文档下载到本地")
     .argument("<publicId>", "文档的 publicId")
     .requiredOption("--out <path>", "保存到哪里")
+    .option("--dry-run", "只打印将要发出的请求，不下载、不写本地文件")
     .action(
-      action<{ out: string }>(deps, exit, async (runtime, args, options) => {
+      action<{ out: string; dryRun?: boolean }>(deps, exit, async (runtime, args, options) => {
         const publicId = requireValue(args[0], "<publicId>");
         const client = await runtime.client();
+        if (options.dryRun) {
+          return {
+            data: [
+              client.describe({ method: "GET", root: hub, path: documentPath(publicId, "/download") }),
+              { method: "GET", url: "<上一步返回的签名下载链接>", note: `把内容写到 ${options.out}（已有同名文件会被覆盖）；不带 API key` },
+            ],
+            meta: { dryRun: true },
+          };
+        }
         const link = await client.request<{ url: string; filename: string }>({
           method: "GET",
           root: hub,

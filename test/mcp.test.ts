@@ -158,6 +158,15 @@ describe("tool calls", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("does not let a mistyped dry_run turn a preview into the real write", async () => {
+    const replies = await session([
+      call(1, "task_comment", { task: "card00000001", text: "hi", dry_run: "true" }),
+      call(2, "task_comment", { task: "card00000001", text: "hi", dry_run: 1 }),
+    ]);
+    expect(replies.every((reply) => reply.result.isError === true)).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
   it("refuses an unknown tool, and write tools in read-only mode", async () => {
     const [unknown] = await session([call(1, "task_delete", { task: "card00000001" })]);
     expect(unknown.error.code).toBe(-32602);

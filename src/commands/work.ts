@@ -96,6 +96,14 @@ async function everyTask(client: HubClient, onlyProject?: string): Promise<Row[]
     method: "GET",
     path: "/workspaces",
   });
+  if (onlyProject && !workspaces.some(({ workspace }) => workspace.publicId === onlyProject)) {
+    throw new CliError({
+      type: "not_found",
+      subtype: "unknown_project",
+      message: `你的账号下没有 publicId 是「${onlyProject}」的项目`,
+      hint: `看看有哪些项目：bshub project list。你能看到的：${workspaces.map(({ workspace }) => workspace.name).join("、") || "（没有）"}`,
+    });
+  }
   const rows: Row[] = [];
   for (const { workspace } of workspaces) {
     if (onlyProject && workspace.publicId !== onlyProject) continue;
@@ -358,7 +366,12 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
         const client = await runtime.client();
         const card = await getCard(client, requireValue(args[0], "<publicId>"));
         const label = resolveLabel(await boardOfCard(client, card), options.label);
-        const has = (card.labels ?? []).some((existing) => existing.publicId === label.publicId);
+        // Compare ids; a card label that arrives without one is compared by name.
+        const has = (card.labels ?? []).some((existing) =>
+          existing.publicId !== undefined
+            ? existing.publicId === label.publicId
+            : existing.name.trim().toLowerCase() === label.name.trim().toLowerCase(),
+        );
         const wanted = !options.remove;
         const result = { publicId: card.publicId, label: label.name };
         if (has === wanted) return { data: { ...result, changed: false } };
@@ -529,9 +542,20 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
     .description("把一个项目的看板、列和任务导出成 JSON（备份用）")
     .requiredOption("--project <publicId>", "项目的 publicId")
     .option("--out <path>", "写到文件；不给就直接在输出里")
+    .option("--dry-run", "只打印将要发出的请求，不读也不写文件")
     .action(
-      action<{ project: string; out?: string }>(deps, exit, async (runtime, _args, options) => {
+      action<{ project: string; out?: string; dryRun?: boolean }>(deps, exit, async (runtime, _args, options) => {
         const client = await runtime.client();
+        if (options.dryRun) {
+          return {
+            data: [
+              client.describe({ method: "GET", path: `/workspaces/${enc(options.project)}/boards` }),
+              { method: "GET", path: "/boards/<上一步返回的每块看板>", note: "逐块读取看板的列和任务" },
+              ...(options.out ? [{ note: `把快照写到 ${options.out}（已有同名文件会被覆盖）` }] : []),
+            ],
+            meta: { dryRun: true },
+          };
+        }
         const summaries = await client.request<{ publicId: string }[]>({
           method: "GET",
           path: `/workspaces/${enc(options.project)}/boards`,
@@ -589,39 +613,46 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
           list: resolveList(detail, item.stage ?? stageNames.todo),
           labels: (item.labels ?? []).map((name) => resolveLabel(detail, name)),
         }));
+        const cardSpec = ({ item, list, labels }: (typeof plan)[number]) => ({
+          method: "POST" as const,
+          path: "/cards",
+          body: {
+            title: item.title,
+            description: item.description ?? "",
+            listPublicId: list.publicId,
+            labelPublicIds: labels.map((label) => label.publicId),
+            memberPublicIds: [],
+            position: "end",
+            ...(item.due ? { dueDate: dueFlag(item.due).toISOString() } : {}),
+          },
+        });
         if (options.dryRun) {
           return {
-            data: plan.map(({ item, list, labels }) => ({ title: item.title, list: list.name, due: item.due ?? null, labels: labels.map((l) => l.name) })),
+            data: plan.map((entry) => client.describe(cardSpec(entry))),
             meta: { dryRun: true, count: plan.length, board: detail.name },
           };
         }
 
         const created: { publicId: string; title: string; list: string }[] = [];
-        for (const { item, list, labels } of plan) {
+        for (const entry of plan) {
+          const { item, list } = entry;
           try {
-            const card = await client.request<{ publicId: string }>({
-              method: "POST",
-              path: "/cards",
-              body: {
-                title: item.title,
-                description: item.description ?? "",
-                listPublicId: list.publicId,
-                labelPublicIds: labels.map((label) => label.publicId),
-                memberPublicIds: [],
-                position: "end",
-                ...(item.due ? { dueDate: dueFlag(item.due).toISOString() } : {}),
-              },
-            });
+            const card = await client.request<{ publicId: string }>(cardSpec(entry));
             created.push({ publicId: card.publicId, title: item.title, list: list.name });
           } catch (error) {
             const cause = error instanceof CliError ? error : undefined;
+            // When the reply never arrived, the card may exist all the same.
+            const unsure = cause?.type === "network" || (cause?.status ?? 0) >= 500;
+            const done = `已经新建了 ${created.length} 项（publicId：${created.map((c) => c.publicId).join("、") || "没有"}）`;
             throw new CliError({
               type: cause?.type ?? "api",
               subtype: "import_stopped",
               message: `导入在第 ${created.length + 1} 项（${item.title}）停了：${error instanceof Error ? error.message : String(error)}`,
-              hint: `已经新建了 ${created.length} 项，不要整份重跑；从第 ${created.length + 1} 项开始补。已建的 publicId：${created.map((c) => c.publicId).join("、") || "（没有）"}`,
+              hint: unsure
+                ? `${done}。第 ${created.length + 1} 项可能已经建好了（请求发出后没收到回复）：先在看板上看一眼「${item.title}」，再决定从第 ${created.length + 1} 项还是第 ${created.length + 2} 项补。不要整份重跑。`
+                : `${done}，不要整份重跑；从第 ${created.length + 1} 项开始补。`,
               status: cause?.status,
-              retryable: cause?.retryable,
+              retryable: false,
             });
           }
         }

@@ -140,17 +140,21 @@ export function createClient(options: ClientOptions): HubClient {
     },
 
     async fetchBytes(url) {
-      const response = await transfer(() => fetcher(url, { signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS) }));
-      if (!response.ok) {
-        throw new CliError({
-          type: "api",
-          subtype: "download_failed",
-          message: `文件没有下载下来（存储服务返回 HTTP ${response.status}）`,
-          status: response.status,
-          retryable: response.status >= 500,
-        });
-      }
-      return new Uint8Array(await response.arrayBuffer());
+      return transferBytes(async () => {
+        const response = await fetcher(url, { signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS) });
+        if (!response.ok) {
+          throw new CliError({
+            type: "api",
+            subtype: "download_failed",
+            message: `文件没有下载下来（存储服务返回 HTTP ${response.status}）`,
+            status: response.status,
+            retryable: response.status >= 500,
+          });
+        }
+        // Reading the body is part of the transfer: a connection that drops
+        // half-way fails here, after the headers arrived.
+        return new Uint8Array(await response.arrayBuffer());
+      });
     },
   };
 }
@@ -159,9 +163,14 @@ export function createClient(options: ClientOptions): HubClient {
 const TRANSFER_TIMEOUT_MS = 120_000;
 
 async function transfer(send: () => Promise<Response>): Promise<Response> {
+  return transferBytes(send);
+}
+
+async function transferBytes<T>(send: () => Promise<T>): Promise<T> {
   try {
     return await send();
   } catch (cause) {
+    if (cause instanceof CliError) throw cause;
     throw new CliError({
       type: "network",
       subtype: cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "unreachable",

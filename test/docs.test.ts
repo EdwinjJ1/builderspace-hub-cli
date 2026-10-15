@@ -190,6 +190,12 @@ describe("doc +create", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("will not turn text into a PDF: binary formats need --file", async () => {
+    expect(await run(["doc", "+create", "--title", "a", "--text", "hello", "--filename", "report.pdf"])).toBe(2);
+    expect(lastErr().error).toMatchObject({ subtype: "invalid_param", param: "filename" });
+    expect(calls).toHaveLength(0);
+  });
+
   it("names inline text after its title when no filename is given", async () => {
     routes[`POST ${H}/documents`] = () => json(doc());
     expect(await run(["doc", "+create", "--title", "a", "--text", "x"])).toBe(0);
@@ -240,18 +246,39 @@ describe("doc +create", () => {
 });
 
 describe("doc +update", () => {
-  it("replaces content before changing visibility", async () => {
-    routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ ok: true });
-    routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ title: "新", readable: false }));
-    expect(await run(["doc", "+update", "doc000000001", "--text", "新内容", "--title", "新", "--private"])).toBe(0);
-
+  it("replaces content first and changes visibility last, unless it is going private", async () => {
+    routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ changed: true });
+    routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ title: "新", readable: true }));
+    expect(await run(["doc", "+update", "doc000000001", "--text", "新内容", "--title", "新", "--public"])).toBe(0);
     expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual([
       "PUT /api/hub/v1/documents/doc000000001/content",
       "PATCH /api/hub/v1/documents/doc000000001",
     ]);
     expect(calls[0]!.body).toEqual({ content: "新内容" });
-    expect(calls[1]!.body).toEqual({ title: "新", readable: false });
-    expect(lastOut().data).toMatchObject({ contentReplaced: true, readable: false });
+    expect(calls[1]!.body).toEqual({ title: "新", readable: true });
+    expect(lastOut().data).toMatchObject({ contentReplaced: true });
+  });
+
+  it("goes private before the new text is written, so it is never written into a readable document", async () => {
+    routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ changed: true });
+    routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ readable: false }));
+    expect(await run(["doc", "+update", "doc000000001", "--text", "机密", "--private"])).toBe(0);
+    expect(calls.map((call) => call.method)).toEqual(["PATCH", "PUT"]);
+
+    // The preview shows the same order as the real thing.
+    calls = [];
+    out = "";
+    expect(await run(["doc", "+update", "doc000000001", "--text", "机密", "--private", "--dry-run"])).toBe(0);
+    expect(calls).toHaveLength(0);
+    const steps = lastOut().data as unknown as { method: string }[];
+    expect(steps.map((step) => step.method)).toEqual(["PATCH", "PUT"]);
+  });
+
+  it("stops before the content is written if making the document private fails", async () => {
+    routes[`PATCH ${H}/documents/doc000000001`] = () => json({ message: "boom" }, 500);
+    routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ changed: true });
+    expect(await run(["doc", "+update", "doc000000001", "--text", "机密", "--private"])).toBe(9);
+    expect(calls.map((call) => call.method)).toEqual(["PATCH"]);
   });
 
   it("passes the time it was read at, so a stale save is refused by the Hub", async () => {
@@ -286,6 +313,23 @@ describe("doc +download", () => {
     expect(disk.get("/tmp/out.pdf")).toEqual(new Uint8Array([9, 8, 7]));
     expect(calls.at(-1)!.headers["x-api-key"]).toBeUndefined();
     expect(lastOut().data).toMatchObject({ filename: "合同.pdf", size: 3 });
+  });
+});
+
+describe("download", () => {
+  it("previews without fetching or writing", async () => {
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.pdf", "--dry-run"])).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(disk.size).toBe(0);
+    expect(lastOut().meta).toEqual({ dryRun: true });
+  });
+
+  it("reports a connection that drops while the file is being read as a network error", async () => {
+    routes[`GET ${H}/documents/doc000000001/download`] = () => json({ url: SIGNED, filename: "x.pdf" });
+    routes[`GET https://files.example.test/documents/abc.pdf`] = () =>
+      ({ ok: true, status: 200, arrayBuffer: async () => Promise.reject(new Error("socket hang up")) }) as unknown as Response;
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.pdf"])).toBe(8);
+    expect(lastErr().error).toMatchObject({ type: "network", retryable: true });
   });
 });
 

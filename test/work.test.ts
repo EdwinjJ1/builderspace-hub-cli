@@ -229,6 +229,13 @@ describe("labels and checklists", () => {
     expect(String(lastErr().error.hint)).toContain("紧急");
   });
 
+  it("compares by name when the card's label comes without an id, instead of toggling it off", async () => {
+    routes[`GET ${H}/cards/cardA0000001`] = () => json(cardDetail({ labels: [{ name: "紧急" }] }));
+    expect(await run(["task", "+label", "cardA0000001", "--label", "紧急"])).toBe(0);
+    expect(lastOut().data).toMatchObject({ changed: false });
+    expect(writes()).toHaveLength(0);
+  });
+
   it("leaves a label alone that is already on the card when adding", async () => {
     routes[`GET ${H}/cards/cardA0000001`] = () => json(cardDetail({ labels: [{ publicId: "labl00000001", name: "紧急" }] }));
     expect(await run(["task", "+label", "cardA0000001", "--label", "紧急"])).toBe(0);
@@ -297,6 +304,15 @@ describe("cross-project views", () => {
     expect(await run(["task", "+due-soon", "--days", "0"])).toBe(2);
   });
 
+  it("says so when the project filter matches nothing, instead of an empty success", async () => {
+    for (const args of [["task", "+mine"], ["task", "+overdue"], ["task", "+due-soon"], ["board", "+overall"]]) {
+      err = "";
+      expect(await run([...args, "--project", "projNOPE0001"])).toBe(5);
+      expect(lastErr().error).toMatchObject({ subtype: "unknown_project" });
+      expect(String(lastErr().error.hint)).toContain("社群");
+    }
+  });
+
   it("board +overall gathers one project's boards and counts them", async () => {
     expect(await run(["board", "+overall", "--project", "projA0000001"])).toBe(0);
     expect(lastOut().meta).toEqual({ count: 3, byBoard: { 运营: 3 } });
@@ -304,6 +320,12 @@ describe("cross-project views", () => {
 });
 
 describe("export and import", () => {
+  it("previews an export without reading boards or writing the file", async () => {
+    expect(await run(["export", "--project", "projA0000001", "--out", "/tmp/backup.json", "--dry-run"])).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(disk.has("/tmp/backup.json")).toBe(false);
+  });
+
   it("exports a project to a file", async () => {
     expect(await run(["export", "--project", "projA0000001", "--out", "/tmp/backup.json"])).toBe(0);
     const snapshot = JSON.parse(new TextDecoder().decode(disk.get("/tmp/backup.json")));
@@ -350,13 +372,33 @@ describe("export and import", () => {
     expect(lastOut().meta).toMatchObject({ dryRun: true, count: 1 });
   });
 
-  it("stops at the first failure and says where to resume", async () => {
+  it("stops at the first rejected item and says where to resume", async () => {
     file([{ title: "一" }, { title: "二" }, { title: "三" }]);
     let n = 0;
-    routes[`POST ${H}/cards`] = () => (++n === 2 ? json({ message: "boom" }, 500) : json({ publicId: `new0000000${n}` }));
-    expect(await run(["task", "+import", "--board", "boardA000001", "--file", "/tmp/tasks.json"])).toBe(9);
+    routes[`POST ${H}/cards`] = () => (++n === 2 ? json({ message: "bad title" }, 400) : json({ publicId: `new0000000${n}` }));
+    expect(await run(["task", "+import", "--board", "boardA000001", "--file", "/tmp/tasks.json"])).toBe(2);
     expect(lastErr().error).toMatchObject({ subtype: "import_stopped" });
-    expect(String(lastErr().error.hint)).toContain("第 2 项开始补");
+    expect(String(lastErr().error.hint)).toContain("从第 2 项开始补");
     expect(writes()).toHaveLength(2);
+  });
+
+  it("does not tell you to resume at an item whose reply was lost: it may exist", async () => {
+    file([{ title: "一" }, { title: "二" }]);
+    let n = 0;
+    routes[`POST ${H}/cards`] = () => (++n === 2 ? json({ message: "gateway" }, 502) : json({ publicId: `new0000000${n}` }));
+    expect(await run(["task", "+import", "--board", "boardA000001", "--file", "/tmp/tasks.json"])).toBe(9);
+    const hint = String(lastErr().error.hint);
+    expect(hint).toContain("可能已经建好了");
+    expect(hint).toContain("先在看板上看一眼");
+    expect(lastErr().error.retryable).toBeUndefined();
+  });
+
+  it("--dry-run describes every request that would be sent", async () => {
+    file([{ title: "赞助介绍", due: "2026-10-20", labels: ["文档"] }]);
+    expect(await run(["task", "+import", "--board", "boardA000001", "--file", "/tmp/tasks.json", "--dry-run"])).toBe(0);
+    const [request] = lastOut().data as { method: string; url: string; body: Record<string, unknown> }[];
+    expect(request).toMatchObject({ method: "POST", body: { title: "赞助介绍", listPublicId: "listA0000001", labelPublicIds: ["labl00000002"], position: "end" } });
+    expect(request!.url).toContain("/cards");
+    expect(writes()).toHaveLength(0);
   });
 });

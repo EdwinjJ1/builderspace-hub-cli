@@ -288,7 +288,10 @@ export function argvFor(tool: Tool, input: unknown): string[] {
       }
     }
   }
-  if (tool.write && given.dry_run === true) flags.push("--dry-run");
+  if (tool.write && given.dry_run !== undefined) {
+    if (typeof given.dry_run !== "boolean") throw new ToolInputError("参数 dry_run 要是 true 或 false");
+    if (given.dry_run) flags.push("--dry-run");
+  }
   return [...tool.command, ...positional, ...flags];
 }
 
