@@ -92,6 +92,14 @@ interface Row {
 /** Every task in every project the key can see, with whether it is yours. */
 async function everyTask(client: HubClient, onlyProject?: string): Promise<Row[]> {
   const me = await client.request<{ email?: string }>({ method: "GET", path: "/users/me" });
+  const myEmail = me.email?.trim().toLowerCase();
+  if (!myEmail) {
+    throw new CliError({
+      type: "api",
+      subtype: "unexpected_shape",
+      message: "Hub 没有返回当前账号的邮箱，无法判断哪些任务是你的",
+    });
+  }
   const workspaces = await client.request<{ workspace: { publicId: string; name: string } }[]>({
     method: "GET",
     path: "/workspaces",
@@ -115,7 +123,7 @@ async function everyTask(client: HubClient, onlyProject?: string): Promise<Row[]
       const board = await getBoard(client, summary.publicId);
       const mineIds = new Set(
         (board.workspace?.members ?? [])
-          .filter((member) => (member.user?.email ?? member.email)?.toLowerCase() === me.email?.toLowerCase())
+          .filter((member) => (member.user?.email ?? member.email)?.trim().toLowerCase() === myEmail)
           .map((member) => member.publicId),
       );
       for (const list of board.lists) {
@@ -550,7 +558,7 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
           return {
             data: [
               client.describe({ method: "GET", path: `/workspaces/${enc(options.project)}/boards` }),
-              { method: "GET", path: "/boards/<上一步返回的每块看板>", note: "逐块读取看板的列和任务" },
+              client.describe({ method: "GET", path: "/boards/<上一步返回的每块看板的 publicId>" }),
               ...(options.out ? [{ note: `把快照写到 ${options.out}（已有同名文件会被覆盖）` }] : []),
             ],
             meta: { dryRun: true },

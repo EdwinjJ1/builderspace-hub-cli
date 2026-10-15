@@ -384,8 +384,15 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
 
         let updated: DocSummary | undefined;
         for (const step of steps) {
-          if (step.name === "patch") updated = await client.request<DocSummary>(step.spec);
-          else await client.request(step.spec);
+          if (step.name === "content") {
+            await client.request(step.spec);
+            updated = undefined; // size and updatedAt changed: read it again below
+            continue;
+          }
+          updated = await client.request<DocSummary>(step.spec);
+          // Never write new text into a document that was meant to go private
+          // but is still readable: check before the content step runs.
+          if (patch.readable === false && updated.readable !== false) throw notPrivate(publicId);
         }
         updated ??= await client.request<DocSummary>({ method: "GET", root: hub, path: documentPath(publicId) });
         return { data: { ...docView(updated), ...(content !== undefined ? { contentReplaced: true } : {}) } };

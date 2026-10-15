@@ -290,6 +290,12 @@ describe("cross-project views", () => {
     expect(lastOut().meta).toEqual({ count: 4 });
   });
 
+  it("will not guess who you are when the Hub gives no email, instead of calling everyone's tasks yours", async () => {
+    routes[`GET ${H}/users/me`] = () => json({ id: "u1" });
+    expect(await run(["task", "+mine"])).toBe(9);
+    expect(lastErr().error).toMatchObject({ subtype: "unexpected_shape" });
+  });
+
   it("+overdue finds only my late, unfinished tasks", async () => {
     expect(await run(["task", "+overdue"])).toBe(0);
     expect(lastOut().data.map((row: { title: string }) => row.title)).toEqual(["我的逾期"]);

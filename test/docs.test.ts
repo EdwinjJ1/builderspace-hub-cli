@@ -262,8 +262,9 @@ describe("doc +update", () => {
   it("goes private before the new text is written, so it is never written into a readable document", async () => {
     routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ changed: true });
     routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ readable: false }));
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc({ readable: false }));
     expect(await run(["doc", "+update", "doc000000001", "--text", "机密", "--private"])).toBe(0);
-    expect(calls.map((call) => call.method)).toEqual(["PATCH", "PUT"]);
+    expect(calls.map((call) => call.method)).toEqual(["PATCH", "PUT", "GET"]);
 
     // The preview shows the same order as the real thing.
     calls = [];
@@ -272,6 +273,23 @@ describe("doc +update", () => {
     expect(calls).toHaveLength(0);
     const steps = lastOut().data as unknown as { method: string }[];
     expect(steps.map((step) => step.method)).toEqual(["PATCH", "PUT"]);
+  });
+
+  it("checks that the document really went private before writing new text into it", async () => {
+    routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ readable: true })); // the Hub ignored the flag
+    routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ changed: true });
+    expect(await run(["doc", "+update", "doc000000001", "--text", "机密", "--private"])).toBe(9);
+    expect(lastErr().error).toMatchObject({ subtype: "not_private" });
+    expect(calls.map((call) => call.method)).toEqual(["PATCH"]);
+  });
+
+  it("reads the document again after replacing text, so the size and time it prints are current", async () => {
+    routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ readable: false, size: 5, updatedAt: "old" }));
+    routes[`PUT ${H}/documents/doc000000001/content`] = () => json({ changed: true });
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc({ readable: false, size: 99, updatedAt: "new" }));
+    expect(await run(["doc", "+update", "doc000000001", "--text", "新内容", "--private"])).toBe(0);
+    expect(calls.map((call) => call.method)).toEqual(["PATCH", "PUT", "GET"]);
+    expect(lastOut().data).toMatchObject({ size: 99, updatedAt: "new", contentReplaced: true });
   });
 
   it("stops before the content is written if making the document private fails", async () => {
