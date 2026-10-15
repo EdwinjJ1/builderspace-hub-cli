@@ -54,6 +54,7 @@ CLI 现在只用 Kan 原有的 REST 接口（`/api/v1`）。下面这些 Hub 自
 | 后台：账号、注册链接、项目权限、职能颜色、操作日志 | `bshub admin …` | 后台接口的 API key 版本，**必须**按 key 的权限范围限制，并全部写操作日志 |
 | 登录 | `bshub auth login`（设备码） | 设备码授权端点；Hub 页面上确认授权 |
 | 事件 | `bshub event +watch` | webhook 已有；需要 SSE 或长轮询端点 |
+| 文档库 | `bshub doc …`（已实现） | `/api/hub/v1/documents`：只开放读、新建和改，**不开放删除和分配编辑权**；约定见 [HUB_DOCUMENTS_API.md](HUB_DOCUMENTS_API.md) |
 
 这些都记在 Hub 仓库的 Issues 里。
 

@@ -52,6 +52,20 @@
 | `task +checklist …` | 检查清单 | 🗓 |
 | `task +run <id> --agent claude\|codex` | 把任务交给本机的 Claude Code / Codex（[AI_CHANNEL.md](AI_CHANNEL.md)） | 🗓 |
 
+## 文档库
+
+文档走 Hub 自己的接口 `/api/hub/v1/documents`，约定见 [HUB_DOCUMENTS_API.md](HUB_DOCUMENTS_API.md)。
+
+| 命令 | 说明 | 状态 |
+| --- | --- | --- |
+| `doc list [--folder] [--search]` | 一个文件夹的内容（不指定是最上层），或搜索 | ✅ |
+| `doc get <id>` / `doc cat <id>` | 详情 / 文本文档的内容 | ✅ |
+| `doc +create --title [--file \| --text \| --stdin] [--filename] [--folder] [--private]` | 新建。md / txt / csv / json / html 直接发文本；PDF、PPT 等先上传再完成 | ✅ |
+| `doc +update <id> [--title] [--description] [--folder] [--private\|--public] [--file \| --text \| --stdin]` | 改信息、可读性，或换掉文本内容 | ✅ |
+| `doc +download <id> --out <path>` | 下载到本地 | ✅ |
+| `doc folder +create --name [--parent]` | 新建文件夹 | ✅ |
+| 删除文档、分配编辑权限 | **只能在网页里做。** API key 还没有权限范围，key 泄露时不能删文件或转让编辑权，所以刻意不开放，等带范围的 key（v0.3）再说 | — |
+
 ## 后台（需要后台角色）
 
 | 命令 | 说明 | 状态 |

@@ -8,10 +8,15 @@ import { CliError } from "./errors.js";
 
 export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+/** Which REST API a request goes to: Kan's own, or the Hub's (`/api/hub/v1`). */
+export type ApiRoot = "kan" | "hub";
+
 export interface RequestSpec {
   method: Method;
-  /** Path under /api/v1, e.g. "/workspaces". */
+  /** Path under the root, e.g. "/workspaces". */
   path: string;
+  /** Defaults to Kan's own API. The Hub's own features (documents) use "hub". */
+  root?: ApiRoot;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
 }
@@ -29,14 +34,23 @@ export interface HubClient {
   describe(spec: RequestSpec): Record<string, unknown>;
   /** A URL that needs no key (health, OpenAPI document). */
   url(path: string): string;
+  /**
+   * Sends raw bytes to an address the Hub handed out (a signed storage link).
+   * The API key is never sent: that address belongs to the storage service.
+   */
+  sendBytes(spec: { method: "PUT"; url: string; body: Uint8Array; headers?: Record<string, string> }): Promise<void>;
+  /** Fetches the bytes behind a signed link, again without the API key. */
+  fetchBytes(url: string): Promise<Uint8Array>;
 }
 
-const API_ROOT = "/api/v1";
+const API_ROOTS: Record<ApiRoot, string> = { kan: "/api/v1", hub: "/api/hub/v1" };
+const API_ROOT = API_ROOTS.kan;
 
-export function apiPath(path: string): string {
+export function apiPath(path: string, root: ApiRoot = "kan"): string {
+  const prefix = API_ROOTS[root];
   const trimmed = path.trim();
   const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.startsWith(`${API_ROOT}/`) ? withSlash.slice(API_ROOT.length) : withSlash;
+  return withSlash.startsWith(`${prefix}/`) ? withSlash.slice(prefix.length) : withSlash;
 }
 
 export function createClient(options: ClientOptions): HubClient {
@@ -44,7 +58,8 @@ export function createClient(options: ClientOptions): HubClient {
   const timeoutMs = options.timeoutMs ?? 30_000;
 
   const buildUrl = (spec: RequestSpec) => {
-    const url = new URL(`${options.url}${API_ROOT}${apiPath(spec.path)}`);
+    const root = spec.root ?? "kan";
+    const url = new URL(`${options.url}${API_ROOTS[root]}${apiPath(spec.path, root)}`);
     for (const [key, value] of Object.entries(spec.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
@@ -101,7 +116,60 @@ export function createClient(options: ClientOptions): HubClient {
       if (response.ok) return body as T;
       throw errorFromResponse(response, body);
     },
+
+    async sendBytes(spec) {
+      const response = await transfer(() =>
+        fetcher(spec.url, {
+          method: spec.method,
+          headers: spec.headers,
+          // Node's fetch takes bytes as a body; the DOM typings only know Blob and friends.
+          body: spec.body as unknown as BodyInit,
+          signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+        }),
+      );
+      if (!response.ok) {
+        throw new CliError({
+          type: "api",
+          subtype: "upload_failed",
+          message: `文件没有传上去（存储服务返回 HTTP ${response.status}）`,
+          status: response.status,
+          retryable: response.status >= 500,
+          hint: "上传链接有有效期，重新运行命令会拿到新的链接。",
+        });
+      }
+    },
+
+    async fetchBytes(url) {
+      const response = await transfer(() => fetcher(url, { signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS) }));
+      if (!response.ok) {
+        throw new CliError({
+          type: "api",
+          subtype: "download_failed",
+          message: `文件没有下载下来（存储服务返回 HTTP ${response.status}）`,
+          status: response.status,
+          retryable: response.status >= 500,
+        });
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    },
   };
+}
+
+/** Big files take longer than a JSON call. */
+const TRANSFER_TIMEOUT_MS = 120_000;
+
+async function transfer(send: () => Promise<Response>): Promise<Response> {
+  try {
+    return await send();
+  } catch (cause) {
+    throw new CliError({
+      type: "network",
+      subtype: cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "unreachable",
+      message: "连不上文件存储服务",
+      hint: "检查网络后重试。",
+      retryable: true,
+    });
+  }
 }
 
 function parseJson(text: string): unknown {

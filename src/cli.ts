@@ -3,6 +3,7 @@ import { Command, CommanderError } from "commander";
 import type { Deps } from "./core/runtime.js";
 import { registerAuth } from "./commands/auth.js";
 import { registerConfig } from "./commands/config.js";
+import { registerDocs } from "./commands/docs.js";
 import { registerMeta } from "./commands/meta.js";
 import { registerResources } from "./commands/resources.js";
 import { EXIT_CODES } from "./core/errors.js";
@@ -33,6 +34,7 @@ export async function runCli(argv: string[], deps: Deps): Promise<number> {
   registerAuth(program, deps, exit);
   registerMeta(program, deps, exit);
   registerResources(program, deps, exit);
+  registerDocs(program, deps, exit);
 
   try {
     await program.parseAsync(argv, { from: "user" });
