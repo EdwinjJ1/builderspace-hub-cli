@@ -16,7 +16,6 @@ interface Call {
 }
 
 const KEY = `kan_${"x".repeat(20)}cdef`;
-const SIGNED = "https://files.example.test/documents/abc.pdf?signature=fake";
 
 let calls: Call[];
 let routes: Record<string, (call: Call) => Response>;
@@ -160,22 +159,22 @@ describe("doc +create", () => {
     expect(lastErr().error).toMatchObject({ subtype: "not_private" });
   });
 
-  it("uploads a PDF to the signed link without the API key, then completes it", async () => {
-    disk.set("/tmp/合同.pdf", new Uint8Array([1, 2, 3, 4]));
-    routes[`POST ${H}/documents/uploads`] = () => json({ uploadId: "upl000000001", url: SIGNED, method: "PUT" });
-    routes[`PUT https://files.example.test/documents/abc.pdf`] = () => new Response(null, { status: 200 });
-    routes[`POST ${H}/documents/uploads/upl000000001/complete`] = () =>
-      json(doc({ filename: "合同.pdf", ext: "pdf", size: 4, readable: false }));
+  it("creates an HTML document from a file", async () => {
+    disk.set("/tmp/海报.html", new TextEncoder().encode("<h1>10-22</h1>"));
+    routes[`POST ${H}/documents`] = () => json(doc({ filename: "海报.html", ext: "html" }));
+    expect(await run(["doc", "+create", "--title", "海报", "--file", "/tmp/海报.html"])).toBe(0);
+    expect(calls[0]!.body).toMatchObject({ filename: "海报.html", content: "<h1>10-22</h1>" });
+  });
 
-    expect(await run(["doc", "+create", "--title", "合同", "--file", "/tmp/合同.pdf", "--private"])).toBe(0);
-
-    const put = calls.find((call) => call.method === "PUT")!;
-    expect(put.url).toContain("https://files.example.test/");
-    expect(put.headers["x-api-key"]).toBeUndefined();
-    expect(put.body).toEqual(new Uint8Array([1, 2, 3, 4]));
-    expect(calls[0]!.body).toEqual({ filename: "合同.pdf", size: 4 });
-    expect(calls.at(-1)!.body).toMatchObject({ title: "合同", readable: false });
-    expect(out).not.toContain(KEY);
+  it("refuses Word, PDF and slides with a pointer to the web upload, and sends nothing", async () => {
+    for (const name of ["合同.pdf", "方案.docx", "deck.pptx", "notes.txt"]) {
+      disk.set(`/tmp/${name}`, new Uint8Array([1, 2, 3]));
+      err = "";
+      expect(await run(["doc", "+create", "--title", "a", "--file", `/tmp/${name}`])).toBe(2);
+      expect(lastErr().error).toMatchObject({ subtype: "invalid_param", param: "file" });
+      expect(String(lastErr().error.hint)).toContain("上传文件");
+    }
+    expect(calls).toHaveLength(0);
   });
 
   it("refuses a text file that is not UTF-8 and sends nothing", async () => {
@@ -190,7 +189,7 @@ describe("doc +create", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("will not turn text into a PDF: binary formats need --file", async () => {
+  it("takes only a .md or .html filename for inline text", async () => {
     expect(await run(["doc", "+create", "--title", "a", "--text", "hello", "--filename", "report.pdf"])).toBe(2);
     expect(lastErr().error).toMatchObject({ subtype: "invalid_param", param: "filename" });
     expect(calls).toHaveLength(0);
@@ -202,15 +201,14 @@ describe("doc +create", () => {
     expect(calls[0]!.body).toMatchObject({ filename: "a.md" });
   });
 
-  it("describes the whole upload sequence on --dry-run for a PDF, and sends nothing", async () => {
-    disk.set("/tmp/合同.pdf", new Uint8Array([1, 2, 3]));
-    expect(await run(["doc", "+create", "--title", "合同", "--file", "/tmp/合同.pdf", "--private", "--dry-run"])).toBe(0);
+  it("describes the one request on --dry-run for a file, and sends nothing", async () => {
+    disk.set("/tmp/讲稿.md", new TextEncoder().encode("# 讲稿"));
+    expect(await run(["doc", "+create", "--title", "讲稿", "--file", "/tmp/讲稿.md", "--private", "--dry-run"])).toBe(0);
     expect(calls).toHaveLength(0);
-    const steps = lastOut().data as unknown as { method: string; url: string; note?: string }[];
-    expect(steps.map((step) => step.method)).toEqual(["POST", "PUT", "POST"]);
-    expect(steps[0]!.url).toContain("/documents/uploads");
-    expect(steps[1]!.note).toContain("不带 API key");
-    expect(steps[2]!.url).toContain("/complete");
+    const steps = lastOut().data as unknown as { method: string; url: string; body: unknown }[];
+    expect(steps.map((step) => step.method)).toEqual(["POST"]);
+    expect(steps[0]!.url).toBe(`${H}/documents`);
+    expect(steps[0]!.body).toMatchObject({ filename: "讲稿.md", content: "# 讲稿", readable: false });
   });
 
   it("reports a missing local file as a not-found error with a hint, not a CLI bug", async () => {
@@ -231,9 +229,9 @@ describe("doc +create", () => {
     expect(await run(["doc", "+create", "--title", "a", "--file", "/tmp/a.md"], { files: denied })).toBe(2);
     expect(lastErr().error).toMatchObject({ subtype: "file_unusable" });
     err = "";
-    routes[`GET ${H}/documents/doc000000001/download`] = () => json({ url: SIGNED, filename: "x.pdf" });
-    routes[`GET https://files.example.test/documents/abc.pdf`] = () => new Response(new Uint8Array([1]));
-    expect(await run(["doc", "+download", "doc000000001", "--out", "/root/x.pdf"], { files: denied })).toBe(2);
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc());
+    routes[`GET ${H}/documents/doc000000001/content`] = () => json({ content: "x" });
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/root/x.md"], { files: denied })).toBe(2);
     expect(lastErr().error).toMatchObject({ subtype: "file_unusable" });
   });
 
@@ -323,7 +321,7 @@ describe("doc +update", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("only replaces text content from the command line", async () => {
+  it("replaces content only from a .md or .html file", async () => {
     disk.set("/tmp/deck.pptx", new Uint8Array([1]));
     expect(await run(["doc", "+update", "doc000000001", "--file", "/tmp/deck.pptx"])).toBe(2);
     expect(calls).toHaveLength(0);
@@ -331,31 +329,40 @@ describe("doc +update", () => {
 });
 
 describe("doc +download", () => {
-  it("fetches the signed link without the key and writes the file", async () => {
-    routes[`GET ${H}/documents/doc000000001/download`] = () => json({ url: SIGNED, filename: "合同.pdf" });
-    routes[`GET https://files.example.test/documents/abc.pdf`] = () => new Response(new Uint8Array([9, 8, 7]));
-    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.pdf"])).toBe(0);
+  it("writes the document's text to the file, read through the Hub with the key", async () => {
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc());
+    routes[`GET ${H}/documents/doc000000001/content`] = () => json({ content: "# 讲稿\n" });
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/讲稿.md"])).toBe(0);
 
-    expect(disk.get("/tmp/out.pdf")).toEqual(new Uint8Array([9, 8, 7]));
-    expect(calls.at(-1)!.headers["x-api-key"]).toBeUndefined();
-    expect(lastOut().data).toMatchObject({ filename: "合同.pdf", size: 3 });
+    expect(new TextDecoder().decode(disk.get("/tmp/讲稿.md"))).toBe("# 讲稿\n");
+    expect(calls.every((call) => call.headers["x-api-key"] === KEY)).toBe(true);
+    expect(lastOut().data).toMatchObject({ filename: "讲稿.md", out: "/tmp/讲稿.md", size: 9 });
   });
-});
 
-describe("download", () => {
   it("previews without fetching or writing", async () => {
-    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.pdf", "--dry-run"])).toBe(0);
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.md", "--dry-run"])).toBe(0);
     expect(calls).toHaveLength(0);
     expect(disk.size).toBe(0);
     expect(lastOut().meta).toEqual({ dryRun: true });
   });
 
-  it("reports a connection that drops while the file is being read as a network error", async () => {
-    routes[`GET ${H}/documents/doc000000001/download`] = () => json({ url: SIGNED, filename: "x.pdf" });
-    routes[`GET https://files.example.test/documents/abc.pdf`] = () =>
-      ({ ok: true, status: 200, arrayBuffer: async () => Promise.reject(new Error("socket hang up")) }) as unknown as Response;
-    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.pdf"])).toBe(8);
+  it("reports a connection that drops while the text is being read as a network error", async () => {
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc());
+    routes[`GET ${H}/documents/doc000000001/content`] = () =>
+      ({ ok: true, status: 200, text: async () => Promise.reject(new Error("socket hang up")) }) as unknown as Response;
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.md"])).toBe(8);
     expect(lastErr().error).toMatchObject({ type: "network", retryable: true });
+    expect(disk.size).toBe(0);
+  });
+
+  it("reports a dropped connection as a network error and writes nothing", async () => {
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc());
+    routes[`GET ${H}/documents/doc000000001/content`] = () => {
+      throw new TypeError("fetch failed");
+    };
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.md"])).toBe(8);
+    expect(lastErr().error).toMatchObject({ type: "network", retryable: true });
+    expect(disk.size).toBe(0);
   });
 });
 

@@ -18,11 +18,8 @@
 | --- | --- |
 | `GET /documents?folder=&search=` | `{ folders: [{publicId, name, parentPublicId}], documents: [Document] }` |
 | `GET /documents/{id}` | `Document` |
-| `GET /documents/{id}/content` | `{ content, updatedAt }`，只给文本格式（md / txt / csv / json / html），上限 400 KB；其他格式 400 |
-| `GET /documents/{id}/download` | `{ url, filename }`，短时有效的签名链接 |
-| `POST /documents` | 直接新建文本文档：`{ title, filename, content, description?, folderPublicId?, readable? }` → `Document` |
-| `POST /documents/uploads` | 为二进制文件申请上传：`{ filename, size }` → `{ uploadId, url, method: "PUT", headers? }` |
-| `POST /documents/uploads/{uploadId}/complete` | 文件传完后建成文档：`{ title?, description?, folderPublicId?, readable? }` → `Document` |
+| `GET /documents/{id}/content` | `{ content, updatedAt }`，上限 400 KB |
+| `POST /documents` | 新建文档：`{ title, filename, content, description?, folderPublicId?, readable? }` → `Document`。`filename` 必须是 `.md`、`.html` 或 `.htm`，其他格式 400 |
 | `PUT /documents/{id}/content` | 替换文本内容：`{ content, expectedUpdatedAt? }`（需要编辑权）。带上读取时拿到的 `updatedAt`，文档在那之后被别人改过就回 409，不会覆盖 |
 | `PATCH /documents/{id}` | `{ title?, description?, folderPublicId?, readable? }` → `Document` |
 | `POST /documents/folders` | `{ name, parentPublicId? }` → `{ publicId, name, parentPublicId }` |
@@ -32,5 +29,5 @@
 ## CLI 依赖的几条保证
 
 1. `readable: false` 的文档，创建时就不可读，不存在「先公开再改」的窗口。CLI 仍会检查返回值，不是 false 就立刻 PATCH，再不行就报 `not_private` 并以非零退出。
-2. 上传链接指向存储服务。CLI **不会**把 API key 发给它。
-3. 文本文档必须是 UTF-8：读到非 UTF-8 的文件会回 400，不会用替换字符显示。
+2. Hub 只存 Markdown 和 HTML 文本（2026-10-17 起），没有上传和签名下载链接；CLI 的所有请求都只发往 Hub。
+3. 文档必须是 UTF-8：读到非 UTF-8 的内容会回 400，不会用替换字符显示。
