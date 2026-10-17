@@ -346,6 +346,15 @@ describe("doc +download", () => {
     expect(lastOut().meta).toEqual({ dryRun: true });
   });
 
+  it("reports a connection that drops while the text is being read as a network error", async () => {
+    routes[`GET ${H}/documents/doc000000001`] = () => json(doc());
+    routes[`GET ${H}/documents/doc000000001/content`] = () =>
+      ({ ok: true, status: 200, text: async () => Promise.reject(new Error("socket hang up")) }) as unknown as Response;
+    expect(await run(["doc", "+download", "doc000000001", "--out", "/tmp/out.md"])).toBe(8);
+    expect(lastErr().error).toMatchObject({ type: "network", retryable: true });
+    expect(disk.size).toBe(0);
+  });
+
   it("reports a dropped connection as a network error and writes nothing", async () => {
     routes[`GET ${H}/documents/doc000000001`] = () => json(doc());
     routes[`GET ${H}/documents/doc000000001/content`] = () => {

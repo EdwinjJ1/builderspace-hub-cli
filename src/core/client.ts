@@ -50,6 +50,15 @@ export function createClient(options: ClientOptions): HubClient {
   const fetcher = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 30_000;
 
+  const unreachable = (cause: unknown) =>
+    new CliError({
+      type: "network",
+      subtype: cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "unreachable",
+      message: `连不上 Hub：${options.url}`,
+      hint: "检查网络和地址（bshub doctor），稍后重试。",
+      retryable: true,
+    });
+
   const buildUrl = (spec: RequestSpec) => {
     const root = spec.root ?? "kan";
     const url = new URL(`${options.url}${API_ROOTS[root]}${apiPath(spec.path, root)}`);
@@ -95,16 +104,17 @@ export function createClient(options: ClientOptions): HubClient {
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (cause) {
-        throw new CliError({
-          type: "network",
-          subtype: cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "unreachable",
-          message: `连不上 Hub：${options.url}`,
-          hint: "检查网络和地址（bshub doctor），稍后重试。",
-          retryable: true,
-        });
+        throw unreachable(cause);
       }
 
-      const text = await response.text();
+      let text: string;
+      try {
+        // The body can still fail after the headers arrived: a dropped
+        // connection or the timeout firing half-way through.
+        text = await response.text();
+      } catch (cause) {
+        throw unreachable(cause);
+      }
       const body = parseJson(text);
       if (response.ok) return body as T;
       throw errorFromResponse(response, body);
