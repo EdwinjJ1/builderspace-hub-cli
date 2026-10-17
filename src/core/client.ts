@@ -34,13 +34,6 @@ export interface HubClient {
   describe(spec: RequestSpec): Record<string, unknown>;
   /** A URL that needs no key (health, OpenAPI document). */
   url(path: string): string;
-  /**
-   * Sends raw bytes to an address the Hub handed out (a signed storage link).
-   * The API key is never sent: that address belongs to the storage service.
-   */
-  sendBytes(spec: { method: "PUT"; url: string; body: Uint8Array; headers?: Record<string, string> }): Promise<void>;
-  /** Fetches the bytes behind a signed link, again without the API key. */
-  fetchBytes(url: string): Promise<Uint8Array>;
 }
 
 const API_ROOTS: Record<ApiRoot, string> = { kan: "/api/v1", hub: "/api/hub/v1" };
@@ -116,69 +109,7 @@ export function createClient(options: ClientOptions): HubClient {
       if (response.ok) return body as T;
       throw errorFromResponse(response, body);
     },
-
-    async sendBytes(spec) {
-      const response = await transfer(() =>
-        fetcher(spec.url, {
-          method: spec.method,
-          headers: spec.headers,
-          // Node's fetch takes bytes as a body; the DOM typings only know Blob and friends.
-          body: spec.body as unknown as BodyInit,
-          signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-        }),
-      );
-      if (!response.ok) {
-        throw new CliError({
-          type: "api",
-          subtype: "upload_failed",
-          message: `文件没有传上去（存储服务返回 HTTP ${response.status}）`,
-          status: response.status,
-          retryable: response.status >= 500,
-          hint: "上传链接有有效期，重新运行命令会拿到新的链接。",
-        });
-      }
-    },
-
-    async fetchBytes(url) {
-      return transferBytes(async () => {
-        const response = await fetcher(url, { signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS) });
-        if (!response.ok) {
-          throw new CliError({
-            type: "api",
-            subtype: "download_failed",
-            message: `文件没有下载下来（存储服务返回 HTTP ${response.status}）`,
-            status: response.status,
-            retryable: response.status >= 500,
-          });
-        }
-        // Reading the body is part of the transfer: a connection that drops
-        // half-way fails here, after the headers arrived.
-        return new Uint8Array(await response.arrayBuffer());
-      });
-    },
   };
-}
-
-/** Big files take longer than a JSON call. */
-const TRANSFER_TIMEOUT_MS = 120_000;
-
-async function transfer(send: () => Promise<Response>): Promise<Response> {
-  return transferBytes(send);
-}
-
-async function transferBytes<T>(send: () => Promise<T>): Promise<T> {
-  try {
-    return await send();
-  } catch (cause) {
-    if (cause instanceof CliError) throw cause;
-    throw new CliError({
-      type: "network",
-      subtype: cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "unreachable",
-      message: "连不上文件存储服务",
-      hint: "检查网络后重试。",
-      retryable: true,
-    });
-  }
 }
 
 function parseJson(text: string): unknown {

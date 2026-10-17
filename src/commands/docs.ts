@@ -9,8 +9,9 @@ import { readLocalFile, writeLocalFile } from "../core/files.js";
 import { action, requireValue } from "../core/runtime.js";
 
 /**
- * The document library: contracts, decks, scripts. These are the Hub's own
- * REST endpoints (`/api/hub/v1/documents`), not Kan's.
+ * The document library: plans, scripts and notes in Markdown or HTML. These
+ * are the Hub's own REST endpoints (`/api/hub/v1/documents`), not Kan's. The
+ * Hub keeps no files: every document is text, so it travels as JSON.
  *
  * Reading, creating and editing work from the CLI. Deleting a document and
  * handing out edit rights stay in the web app on purpose: an API key has no
@@ -39,18 +40,19 @@ interface Folder {
   parentPublicId?: string | null;
 }
 
-interface Upload {
-  uploadId: string;
-  url: string;
-  method?: "PUT";
-  headers?: Record<string, string>;
-}
-
-/** Formats the Hub stores as text, so they travel as JSON rather than as an upload. */
-const TEXT_EXTENSIONS = new Set(["md", "txt", "csv", "json", "html", "htm"]);
+/** The only formats the Hub holds. */
+const FORMATS = new Set(["md", "html", "htm"]);
 
 const extensionOf = (filename: string) => extname(filename).slice(1).toLowerCase();
-const isText = (filename: string) => TEXT_EXTENSIONS.has(extensionOf(filename));
+
+function requireFormat(filename: string, flag: string) {
+  if (FORMATS.has(extensionOf(filename))) return;
+  throw validationError(
+    `${filename}：Hub 的文档只有 Markdown（.md）和 HTML（.html）两种`,
+    flag,
+    "Word（.docx）请在网页「文档」页的「上传文件」里传，会自动转成 Markdown；PDF、PPT 不收。",
+  );
+}
 
 const nodeFiles: FileAccess = { readFile, writeFile };
 
@@ -129,29 +131,12 @@ async function createDocument(
     readable: input.readable,
   };
 
-  let created: DocSummary;
-  if (isText(input.filename)) {
-    created = await client.request<DocSummary>({
-      method: "POST",
-      root: hub,
-      path: "/documents",
-      body: { ...common, filename: input.filename, content: textOrFail(input.bytes, input.filename) },
-    });
-  } else {
-    const upload = await client.request<Upload>({
-      method: "POST",
-      root: hub,
-      path: "/documents/uploads",
-      body: { filename: input.filename, size: input.bytes.byteLength },
-    });
-    await client.sendBytes({ method: "PUT", url: upload.url, body: input.bytes, headers: upload.headers });
-    created = await client.request<DocSummary>({
-      method: "POST",
-      root: hub,
-      path: `/documents/uploads/${encodeURIComponent(upload.uploadId)}/complete`,
-      body: common,
-    });
-  }
+  const created = await client.request<DocSummary>({
+    method: "POST",
+    root: hub,
+    path: "/documents",
+    body: { ...common, filename: input.filename, content: textOrFail(input.bytes, input.filename) },
+  });
 
   if (!input.readable && created.readable !== false) {
     // An older Hub may ignore the flag. Close the gap now rather than trust it.
@@ -168,7 +153,7 @@ async function createDocument(
 }
 
 export function registerDocs(program: Command, deps: Deps, exit: { code: number }) {
-  const doc = program.command("doc").description("文档库：合同、PPT、讲稿等。带 + 的是快捷命令");
+  const doc = program.command("doc").description("文档库：Markdown 和 HTML 写的方案、讲稿、笔记。带 + 的是快捷命令");
 
   doc
     .command("list")
@@ -208,7 +193,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
 
   doc
     .command("cat")
-    .description("一份文本文档（md / txt / csv / json / html）的内容")
+    .description("一份文档（md / html）的内容")
     .argument("<publicId>", "文档的 publicId")
     .action(
       action(deps, exit, async (runtime, args) => {
@@ -224,7 +209,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
 
   doc
     .command("+create")
-    .description("新建文档：文本从 --file / --text / --stdin 来；PDF、PPT 等从 --file 来")
+    .description("新建文档（Markdown 或 HTML）：内容从 --file / --text / --stdin 来")
     .requiredOption("--title <title>", "标题")
     .option("--file <path>", "本地文件")
     .option("--text <text>", "直接给文本内容（文件名默认是「标题.md」，可用 --filename 改）")
@@ -248,12 +233,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
       }>(deps, exit, async (runtime, _args, options) => {
         const title = requireValue(options.title.trim(), "--title");
         const { filename, bytes } = await readContent(deps, options, options.filename, `${title.replace(/[\\/]/g, "-")}.md`);
-        if (!isText(filename) && options.file === undefined) {
-          throw validationError(
-            `${filename} 不是文本格式，内容要从 --file 给（--text / --stdin 只用于 md、txt、csv、json、html）`,
-            "filename",
-          );
-        }
+        requireFormat(filename, options.file !== undefined && options.filename === undefined ? "file" : "filename");
         const client = await runtime.client();
         const readable = !options.private;
 
@@ -264,29 +244,14 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
             ...(options.folder ? { folderPublicId: options.folder } : {}),
             readable,
           };
-          const data = isText(filename)
-            ? [
-                client.describe({
-                  method: "POST",
-                  root: hub,
-                  path: "/documents",
-                  body: { ...common, filename, content: textOrFail(bytes, filename) },
-                }),
-              ]
-            : [
-                client.describe({ method: "POST", root: hub, path: "/documents/uploads", body: { filename, size: bytes.byteLength } }),
-                {
-                  method: "PUT",
-                  url: "<上一步返回的签名上传链接>",
-                  note: `发送 ${bytes.byteLength} 字节的文件内容；不带 API key`,
-                },
-                client.describe({
-                  method: "POST",
-                  root: hub,
-                  path: "/documents/uploads/<上一步返回的 uploadId>/complete",
-                  body: common,
-                }),
-              ];
+          const data = [
+            client.describe({
+              method: "POST",
+              root: hub,
+              path: "/documents",
+              body: { ...common, filename, content: textOrFail(bytes, filename) },
+            }),
+          ];
           return { data, meta: { dryRun: true } };
         }
         const created = await createDocument(client, {
@@ -310,7 +275,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
     .option("--folder <publicId>", "移到这个文件夹")
     .option("--private", "设为不可读")
     .option("--public", "设为所有登录的人可读")
-    .option("--file <path>", "用这个文本文件的内容替换")
+    .option("--file <path>", "用这个文件（.md / .html）的内容替换")
     .option("--text <text>", "用这段文本替换")
     .option("--stdin", "用标准输入的文本替换")
     .option("--if-unmodified-since <updatedAt>", "替换内容时：只有文档的更新时间还是这个值才保存（用 doc cat 拿到的 updatedAt），否则报冲突，避免覆盖别人的修改")
@@ -362,13 +327,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
         let content: string | undefined;
         if (replacing) {
           const read = await readContent(deps, options, undefined, "内容.md");
-          if (options.file !== undefined && !isText(read.filename)) {
-            throw validationError(
-              "命令行目前只能替换文本文档的内容（md / txt / csv / json / html）",
-              "file",
-              "PDF、PPT 等请在网页里替换文件。",
-            );
-          }
+          if (options.file !== undefined) requireFormat(read.filename, "file");
           content = textOrFail(read.bytes, read.filename);
         }
 
@@ -409,7 +368,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
 
   doc
     .command("+download")
-    .description("把一份文档下载到本地")
+    .description("把一份文档的内容存到本地文件")
     .argument("<publicId>", "文档的 publicId")
     .requiredOption("--out <path>", "保存到哪里")
     .option("--dry-run", "只打印将要发出的请求，不下载、不写本地文件")
@@ -417,23 +376,23 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
       action<{ out: string; dryRun?: boolean }>(deps, exit, async (runtime, args, options) => {
         const publicId = requireValue(args[0], "<publicId>");
         const client = await runtime.client();
+        const detailSpec = { method: "GET" as const, root: hub, path: documentPath(publicId) };
+        const contentSpec = { method: "GET" as const, root: hub, path: documentPath(publicId, "/content") };
         if (options.dryRun) {
           return {
             data: [
-              client.describe({ method: "GET", root: hub, path: documentPath(publicId, "/download") }),
-              { method: "GET", url: "<上一步返回的签名下载链接>", note: `把内容写到 ${options.out}（已有同名文件会被覆盖）；不带 API key` },
+              client.describe(detailSpec),
+              client.describe(contentSpec),
+              { note: `把内容写到 ${options.out}（已有同名文件会被覆盖）` },
             ],
             meta: { dryRun: true },
           };
         }
-        const link = await client.request<{ url: string; filename: string }>({
-          method: "GET",
-          root: hub,
-          path: documentPath(publicId, "/download"),
-        });
-        const bytes = await client.fetchBytes(link.url);
+        const detail = await client.request<DocSummary>(detailSpec);
+        const { content } = await client.request<{ content: string }>(contentSpec);
+        const bytes = new TextEncoder().encode(content);
         await writeLocalFile(deps.files ?? nodeFiles, options.out, bytes);
-        return { data: { publicId, filename: link.filename, out: options.out, size: bytes.byteLength } };
+        return { data: { publicId, filename: detail.filename, out: options.out, size: bytes.byteLength } };
       }),
     );
 
