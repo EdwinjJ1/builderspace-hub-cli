@@ -250,7 +250,7 @@ export function registerWork(program: Command, deps: Deps, exit: { code: number 
 
   board
     .command("+overall")
-    .description("总版：一个项目里开发 / 运营 / 营销所有看板的全部任务")
+    .description("总版：一个项目里技术 / 活动 / 宣传所有看板的全部任务")
     .requiredOption("--project <publicId>", "项目的 publicId")
     .option("--stage <stage>", "只看某一阶段")
     .action(

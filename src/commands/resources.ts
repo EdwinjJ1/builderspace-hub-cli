@@ -8,7 +8,7 @@ import { action, requireValue } from "../core/runtime.js";
 
 /**
  * Projects, boards and tasks: the shortcuts people and agents use most.
- * A project is a Kan workspace, a function (开发 / 运营 / 营销) is a board,
+ * A project is a Kan workspace, a function (技术 / 活动 / 宣传) is a board,
  * a task is a card and its column is a list.
  */
 

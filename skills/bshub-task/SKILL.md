@@ -14,7 +14,7 @@ metadata:
 
 ## 概念
 
-- 项目 = Hub 里的一个工作区（例如 CourseMate）；职能 = 项目里的一块看板（开发 / 运营 / 营销）；任务 = 看板上的一张卡片；阶段 = 卡片所在的列。
+- 项目 = Hub 里的一个工作区（例如 CourseMate）；职能 = 项目里的一块看板（技术 / 活动 / 宣传）；任务 = 看板上的一张卡片；阶段 = 卡片所在的列。
 - 阶段可以用中文或英文：待办 / todo、进行中 / doing、待验收 / review、已完成 / done。
 - 所有 id 都是 12 位的 `publicId`。先用 `project list` → `board list --project` 找到看板 id。
 
