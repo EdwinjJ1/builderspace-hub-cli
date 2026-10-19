@@ -33,7 +33,7 @@
 | `project get <id>` | 项目详情和成员 | ✅ |
 | `board list --project <id>` | 项目里的看板和列 | ✅ |
 | `board get <id>` | 看板的列和每列任务数 | ✅ |
-| `board +overall --project <id> [--stage]` | 总版：开发 / 运营 / 营销的全部任务。在客户端逐块看板汇总，不需要新接口 | ✅ |
+| `board +overall --project <id> [--stage]` | 总版：技术 / 活动 / 运营的全部任务。在客户端逐块看板汇总，不需要新接口 | ✅ |
 | `label list --board <id>` | 看板上的标签 | ✅ |
 
 ## 任务
