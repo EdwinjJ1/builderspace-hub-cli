@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import type { Deps, Stdio } from "./core/runtime.js";
 import { runCli } from "./cli.js";
 import { processWriter } from "./core/output.js";
+import { enableEnvProxy } from "./core/proxy.js";
 
 /** Reads a line without echoing it, for API keys typed at a prompt. */
 function readSecret(prompt: string): Promise<string> {
@@ -40,6 +41,8 @@ const stdio: Stdio = {
 const deps: Deps = {
   writer: processWriter,
   env: process.env,
+  // Before any request: fetch follows HTTPS_PROXY / NO_PROXY from here on.
+  proxy: enableEnvProxy(process.env),
   fetch,
   readSecret,
   readStdin,
