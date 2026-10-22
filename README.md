@@ -62,6 +62,12 @@ bshub doc +create --title "讲稿" --file 讲稿.md --private
 
 要让 Claude Code、Codex 等直接把任务和文档当工具用：`bshub mcp serve`（只读加 `--read-only`），见 [docs/MCP.md](docs/MCP.md)。
 
+## 代理
+
+和 curl 一样，bshub 按 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`（小写的也认，两种都设时小写优先）走代理，只支持 http 和 https 代理。Node 24.14 以上自动生效；Node 22.21、24.5 到 24.13 要在运行前设置 `NODE_USE_ENV_PROXY=1`；Node 20 走不了代理。
+
+设了代理还是连不上 Hub，看 `bshub doctor` 的 `proxy` 和 `hub_reachable` 两项：走没走代理、代理是不是没开，都会写在 `detail` 里。代理地址里的用户名和密码不会出现在输出里。
+
 ## 三层命令
 
 | 层 | 例子 | 用途 |

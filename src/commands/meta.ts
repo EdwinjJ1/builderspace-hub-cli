@@ -1,10 +1,12 @@
 import type { Command } from "commander";
 
 import type { Method } from "../core/client.js";
+import type { ProxyRoute, ProxySupport } from "../core/proxy.js";
 import type { Deps } from "../core/runtime.js";
 import { apiPath } from "../core/client.js";
 import { isConfigExposed } from "../core/config.js";
 import { CliError, toCliError, validationError } from "../core/errors.js";
+import { proxyRoute } from "../core/proxy.js";
 import { action, jsonFlag } from "../core/runtime.js";
 
 const METHODS: Method[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -26,6 +28,39 @@ interface OpenApiOperation {
 }
 
 type OpenApiDocument = { paths?: Record<string, Record<string, OpenApiOperation>> };
+
+/** Is a proxy set for this Hub, and does fetch follow it. */
+function proxyCheck(route: ProxyRoute, support: ProxySupport): Check {
+  const name = "proxy";
+  if (route.proxy === null) return { name, ok: true, detail: `没有设置 ${route.variable}，直连 Hub` };
+  const setting = `${route.variable}=${route.proxy}`;
+  if (!route.valid) {
+    return {
+      name,
+      ok: false,
+      detail: `${setting} 不是能用的代理：要写成 http://主机:端口 这样的完整地址，只支持 http 和 https 代理`,
+    };
+  }
+  if (route.bypassed) return { name, ok: true, detail: `NO_PROXY 里有这个 Hub，不走 ${setting}，直连` };
+  if (support === "active") return { name, ok: true, detail: `经代理 ${route.proxy} 连接 Hub（${route.variable}）` };
+  if (support === "rejected") return { name, ok: false, detail: `Node 不接受 ${setting}，请求绕过代理直连；检查这个地址` };
+  return {
+    name,
+    ok: false,
+    detail: `设置了 ${setting}，但 Node ${process.versions.node} 的 fetch 不读这个变量，请求绕过代理直连。升级到 Node 24.14 以上；或者运行前设置 NODE_USE_ENV_PROXY=1（Node 22.21、24.5 起支持）`,
+  };
+}
+
+/** Why the Hub could not be reached, as far as fetch tells. */
+function unreachableDetail(url: string, error: unknown, proxy: string | null): string {
+  const cause = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  const code =
+    (error as { name?: unknown } | null)?.name === "TimeoutError" ? "超时" : typeof cause === "string" ? cause : null;
+  const base = `连不上 ${url}${code ? `（${code}）` : ""}`;
+  if (proxy === null) return base;
+  // Behind a proxy the connection is to the proxy, so a refusal is the proxy's.
+  return code === "ECONNREFUSED" ? `${base}：代理 ${proxy} 拒绝连接，代理软件可能没开` : `${base}，经代理 ${proxy}`;
+}
 
 /**
  * The commands about the CLI and the Hub themselves: `doctor` (is everything
@@ -53,6 +88,11 @@ export function registerMeta(program: Command, deps: Deps, exit: { code: number 
           const profile = await runtime.profile();
           checks.push({ name: "profile", ok: true, detail: `${profile.name} → ${profile.url}` });
 
+          const route = proxyRoute(deps.env, profile.url);
+          const support = deps.proxy ?? "active";
+          checks.push(proxyCheck(route, support));
+          const viaProxy = route.valid && !route.bypassed && support === "active" ? route.proxy : null;
+
           const client = await runtime.client();
           try {
             const response = await deps.fetch(client.url("/health"), { signal: AbortSignal.timeout(15_000) });
@@ -62,8 +102,8 @@ export function registerMeta(program: Command, deps: Deps, exit: { code: number 
               ok: response.ok && body?.database !== "error",
               detail: response.ok ? `状态 ${body?.status ?? "?"}，数据库 ${body?.database ?? "?"}` : `HTTP ${response.status}`,
             });
-          } catch {
-            checks.push({ name: "hub_reachable", ok: false, detail: `连不上 ${profile.url}` });
+          } catch (error) {
+            checks.push({ name: "hub_reachable", ok: false, detail: unreachableDetail(profile.url, error, viaProxy) });
           }
 
           try {

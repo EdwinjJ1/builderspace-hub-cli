@@ -22,6 +22,7 @@ metadata:
 - **按 `ok` 或退出码判断成败，按 `error.type` / `error.subtype` 分支**，不要解析 `message`。
 - 出错时先看 `error.hint`，它通常就是下一步要跑的命令。
 - `rate_limit`：等待 `error.retry_after_seconds` 秒再重试，最多重试 3 次。
+- `network`：运行 `bshub doctor`，按 `proxy` 和 `hub_reachable` 两项的 `detail` 处理。写操作在 `network` 错误后不要直接重试，先读一遍确认它是不是已经生效了。
 - `authorization`：不要换别的办法绕过，告诉用户需要谁给什么权限。
 
 ## 找命令

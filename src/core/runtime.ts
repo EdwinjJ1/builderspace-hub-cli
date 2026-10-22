@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import type { HubClient } from "./client.js";
 import type { ConfigFile, ResolvedProfile } from "./config.js";
 import type { Context, Format, Writer } from "./output.js";
+import type { ProxySupport } from "./proxy.js";
 import { createClient } from "./client.js";
 import { configPath, readConfig, resolveProfile } from "./config.js";
 import { CliError, exitCodeOf, toCliError, validationError } from "./errors.js";
@@ -36,6 +37,8 @@ export interface Deps {
   isInteractive: boolean;
   files?: FileAccess;
   stdio?: Stdio;
+  /** Whether `fetch` follows the proxy variables; absent means it does. */
+  proxy?: ProxySupport;
 }
 
 export interface GlobalOptions {

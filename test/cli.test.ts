@@ -164,6 +164,74 @@ describe("tasks", () => {
   });
 });
 
+describe("doctor", () => {
+  const PROXY = "http://user:secret@127.0.0.1:7897";
+  const hubEnv = (extra: Record<string, string>) => ({
+    env: {
+      BSHUB_CONFIG_DIR: configDir,
+      BSHUB_URL: "https://hub.example.test",
+      BSHUB_API_KEY: KEY,
+      ...extra,
+    },
+  });
+  const check = (name: string) =>
+    (lastOut().data.checks as { name: string; ok: boolean; detail: string }[]).find((c) => c.name === name);
+
+  beforeEach(() => {
+    routes["GET /api/v1/health"] = () => json({ status: "ok", database: "ok" });
+  });
+
+  it("reports the proxy it goes through, with the password masked", async () => {
+    expect(await run("doctor", hubEnv({ HTTPS_PROXY: PROXY }))).toBe(0);
+    expect(check("proxy")).toEqual({
+      name: "proxy",
+      ok: true,
+      detail: "经代理 http://***@127.0.0.1:7897 连接 Hub（HTTPS_PROXY）",
+    });
+    expect(out).not.toContain("secret");
+  });
+
+  it("says so when no proxy is set", async () => {
+    expect(await run("doctor", hubEnv({}))).toBe(0);
+    expect(check("proxy")).toMatchObject({ ok: true, detail: "没有设置 HTTPS_PROXY，直连 Hub" });
+  });
+
+  it("is unhealthy when a proxy is set but this Node's fetch ignores it", async () => {
+    expect(await run("doctor", { ...hubEnv({ HTTPS_PROXY: PROXY }), proxy: "unsupported" })).toBe(1);
+    expect(lastOut().data.healthy).toBe(false);
+    expect(check("proxy")?.ok).toBe(false);
+    expect(check("proxy")?.detail).toContain("NODE_USE_ENV_PROXY=1");
+  });
+
+  it("is unhealthy for a proxy address Node cannot use", async () => {
+    expect(await run("doctor", { ...hubEnv({ HTTPS_PROXY: "127.0.0.1:7897" }), proxy: "rejected" })).toBe(1);
+    expect(check("proxy")?.detail).toContain("http://主机:端口");
+  });
+
+  it("goes direct for a Hub in NO_PROXY", async () => {
+    expect(await run("doctor", hubEnv({ HTTPS_PROXY: PROXY, NO_PROXY: ".example.test" }))).toBe(0);
+    expect(check("proxy")?.detail).toContain("NO_PROXY 里有这个 Hub");
+  });
+
+  it("names a proxy that refuses connections as the reason the Hub is unreachable", async () => {
+    const refused: typeof fetch = async () => {
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+    };
+    expect(await run("doctor", { ...hubEnv({ HTTPS_PROXY: PROXY }), fetch: refused })).toBe(1);
+    expect(check("hub_reachable")?.detail).toBe(
+      "连不上 https://hub.example.test（ECONNREFUSED）：代理 http://***@127.0.0.1:7897 拒绝连接，代理软件可能没开",
+    );
+  });
+
+  it("gives the reason without blaming a proxy when there is none", async () => {
+    const timedOut: typeof fetch = async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    };
+    expect(await run("doctor", { ...hubEnv({}), fetch: timedOut })).toBe(1);
+    expect(check("hub_reachable")?.detail).toBe("连不上 https://hub.example.test（超时）");
+  });
+});
+
 describe("usage", () => {
   it("exits 2 for unknown commands and formats, 0 for help", async () => {
     expect(await run("task +fly")).toBe(2);
