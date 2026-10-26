@@ -481,6 +481,35 @@ describe("doc +share", () => {
     expect(patches()).toHaveLength(0);
   });
 
+  it("refuses a project or department name that more than one has, instead of picking one", async () => {
+    const twin = { ...options.projects[0]!, publicId: "proj00000002", name: " builderspace 社团 " };
+    routes[`GET ${H}/documents/audience-options`] = () => json({ ...options, projects: [...options.projects, twin] });
+    expect(await run(["doc", "+share", "doc000000001", "--project", "BuilderSpace 社团"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_project" });
+    err = "";
+    expect(await run(["doc", "+share", "doc000000001", "--department", "BuilderSpace 社团/运营"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_project" });
+    expect(patches()).toHaveLength(0);
+
+    // The publicId still picks exactly one.
+    routes[`PATCH ${H}/documents/doc000000001`] = () =>
+      json(
+        doc({
+          readable: false,
+          audience: "selected",
+          readers: { users: [], groups: [{ projectPublicId: "proj00000002", departmentPublicId: null, label: "builderspace 社团" }] },
+        }),
+      );
+    expect(await run(["doc", "+share", "doc000000001", "--project", "proj00000002"])).toBe(0);
+    expect(patches()[0]!.body).toMatchObject({ audience: { groups: [{ projectPublicId: "proj00000002" }] } });
+
+    routes[`GET ${H}/documents/audience-options`] = () =>
+      json({ ...options, departments: [...options.departments, { publicId: "dept00000003", name: "运营" }] });
+    err = "";
+    expect(await run(["doc", "+share", "doc000000001", "--department", "proj00000001/运营"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_department" });
+  });
+
   it("lists who can be chosen, with department names", async () => {
     expect(await run(["doc", "audience-options"])).toBe(0);
     expect(lastOut().data).toMatchObject({

@@ -125,16 +125,39 @@ function resolveReader(options: AudienceOptions, who: string): string {
   });
 }
 
-function resolveProject(options: AudienceOptions, which: string) {
-  const project = options.projects.find((p) => p.publicId === which.trim() || same(p.name, which));
-  if (project) return project;
+/**
+ * One project or department by publicId, or by a name that only one of them
+ * has. Sharing with the wrong group would open the document to the wrong
+ * people, so a name two of them share is refused rather than guessed.
+ */
+function pickOne<T extends { publicId: string; name: string }>(
+  items: T[],
+  which: string,
+  kind: { noun: string; subtype: string },
+): T {
+  const byId = items.find((item) => item.publicId === which.trim());
+  if (byId) return byId;
+  const named = items.filter((item) => same(item.name, which));
+  if (named.length === 1) return named[0]!;
+  const listed = (list: T[]) => list.map((item) => `${item.name}（${item.publicId}）`).join("、");
+  if (named.length > 1) {
+    throw new CliError({
+      type: "conflict",
+      subtype: `ambiguous_${kind.subtype}`,
+      message: `叫「${which}」的${kind.noun}不止一个`,
+      hint: `改用 publicId：${listed(named)}`,
+    });
+  }
   throw new CliError({
     type: "not_found",
-    subtype: "unknown_project",
-    message: `没有「${which}」这个项目`,
-    hint: `项目：${options.projects.map((p) => `${p.name}（${p.publicId}）`).join("、") || "（没有）"}`,
+    subtype: `unknown_${kind.subtype}`,
+    message: `没有「${which}」这个${kind.noun}`,
+    hint: `${kind.noun}：${listed(items) || "（没有）"}`,
   });
 }
+
+const resolveProject = (options: AudienceOptions, which: string) =>
+  pickOne(options.projects, which, { noun: "项目", subtype: "project" });
 
 /** `项目/部门`, each by publicId or name, e.g. "BuilderSpace 社团/运营". */
 function resolveDepartment(options: AudienceOptions, spec: string): ReaderGroup {
@@ -143,16 +166,7 @@ function resolveDepartment(options: AudienceOptions, spec: string): ReaderGroup 
     throw validationError(`--department 要写成「项目/部门」：${spec}`, "department", "例如 --department \"BuilderSpace 社团/运营\"。");
   }
   const project = resolveProject(options, spec.slice(0, cut));
-  const which = spec.slice(cut + 1);
-  const department = options.departments.find((d) => d.publicId === which.trim() || same(d.name, which));
-  if (!department) {
-    throw new CliError({
-      type: "not_found",
-      subtype: "unknown_department",
-      message: `没有「${which}」这个部门`,
-      hint: `部门：${options.departments.map((d) => d.name).join("、") || "（没有）"}`,
-    });
-  }
+  const department = pickOne(options.departments, spec.slice(cut + 1), { noun: "部门", subtype: "department" });
   return { projectPublicId: project.publicId, departmentPublicId: department.publicId };
 }
 
