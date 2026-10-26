@@ -13,13 +13,23 @@ import { action, requireValue } from "../core/runtime.js";
  * are the Hub's own REST endpoints (`/api/hub/v1/documents`), not Kan's. The
  * Hub keeps no files: every document is text, so it travels as JSON.
  *
- * Reading, creating and editing work from the CLI. Deleting a document and
+ * Reading, creating and editing work from the CLI, and so does choosing who can
+ * read a document (`doc +share`, the web app's 谁能看). Deleting a document and
  * handing out edit rights stay in the web app on purpose: an API key has no
  * scope yet (docs/DESIGN.md), so a leaked key must not be able to remove files
  * or pass on the right to change them.
  */
 
 const hub = "hub" as const;
+
+/** Who can read a document: every member, 指定的人, or only its editors. */
+type Audience = "all" | "selected" | "editors";
+
+/** A document's 指定的人; the Hub only shows them to people who can change them. */
+interface ReaderList {
+  users: { userId: string; name: string }[];
+  groups: { projectPublicId: string; departmentPublicId: string | null; label: string }[];
+}
 
 interface DocSummary {
   publicId: string;
@@ -30,9 +40,24 @@ interface DocSummary {
   size: number;
   folderPublicId?: string | null;
   readable: boolean;
+  audience?: Audience;
+  readers?: ReaderList | null;
   canEdit?: boolean;
   updatedAt?: string;
 }
+
+/** Everyone and everything 指定的人 can name, from `GET /documents/audience-options`. */
+interface AudienceOptions {
+  departments: { publicId: string; name: string }[];
+  projects: {
+    publicId: string;
+    name: string;
+    members: { userId: string; name: string }[];
+    departments: { publicId: string; memberIds: string[] }[];
+  }[];
+}
+
+type ReaderGroup = { projectPublicId: string; departmentPublicId: string | null };
 
 interface Folder {
   publicId: string;
@@ -63,12 +88,83 @@ const docView = (doc: DocSummary) => ({
   size: doc.size,
   folder: doc.folderPublicId ?? null,
   readable: doc.readable,
+  audience: doc.audience ?? null,
   canEdit: doc.canEdit ?? null,
   updatedAt: doc.updatedAt ?? null,
   ...(doc.description ? { description: doc.description } : {}),
 });
 
 const documentPath = (publicId: string, tail = "") => `/documents/${encodeURIComponent(publicId)}${tail}`;
+
+const collect = (value: string, previous: string[]) => [...previous, value];
+
+const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** One person among everyone 指定的人 can name, by userId or by name. */
+function resolveReader(options: AudienceOptions, who: string): string {
+  const people = new Map<string, string>();
+  for (const project of options.projects) {
+    for (const member of project.members) people.set(member.userId, member.name);
+  }
+  if (people.has(who.trim())) return who.trim();
+  const named = [...people].filter(([, name]) => same(name, who));
+  if (named.length === 1) return named[0]![0];
+  if (named.length > 1) {
+    throw new CliError({
+      type: "conflict",
+      subtype: "ambiguous_reader",
+      message: `「${who}」对上了不止一个人`,
+      hint: `改用 userId：${named.map(([userId, name]) => `${name} ${userId}`).join("、")}`,
+    });
+  }
+  throw new CliError({
+    type: "not_found",
+    subtype: "unknown_reader",
+    message: `能选的人里没有「${who}」`,
+    hint: "--reader 要写名字或 userId；bshub doc audience-options 列出所有能选的人。",
+  });
+}
+
+function resolveProject(options: AudienceOptions, which: string) {
+  const project = options.projects.find((p) => p.publicId === which.trim() || same(p.name, which));
+  if (project) return project;
+  throw new CliError({
+    type: "not_found",
+    subtype: "unknown_project",
+    message: `没有「${which}」这个项目`,
+    hint: `项目：${options.projects.map((p) => `${p.name}（${p.publicId}）`).join("、") || "（没有）"}`,
+  });
+}
+
+/** `项目/部门`, each by publicId or name, e.g. "BuilderSpace 社团/运营". */
+function resolveDepartment(options: AudienceOptions, spec: string): ReaderGroup {
+  const cut = spec.lastIndexOf("/");
+  if (cut <= 0 || cut === spec.length - 1) {
+    throw validationError(`--department 要写成「项目/部门」：${spec}`, "department", "例如 --department \"BuilderSpace 社团/运营\"。");
+  }
+  const project = resolveProject(options, spec.slice(0, cut));
+  const which = spec.slice(cut + 1);
+  const department = options.departments.find((d) => d.publicId === which.trim() || same(d.name, which));
+  if (!department) {
+    throw new CliError({
+      type: "not_found",
+      subtype: "unknown_department",
+      message: `没有「${which}」这个部门`,
+      hint: `部门：${options.departments.map((d) => d.name).join("、") || "（没有）"}`,
+    });
+  }
+  return { projectPublicId: project.publicId, departmentPublicId: department.publicId };
+}
+
+/** The Hub answered, but not with the audience that was asked for (an older Hub ignores it). */
+function audienceNotApplied(publicId: string, wanted: Audience, got: DocSummary) {
+  return new CliError({
+    type: "api",
+    subtype: "audience_not_applied",
+    message: `文档 ${publicId} 没能改成想要的可见范围（要 ${wanted}，现在是 ${got.audience ?? (got.readable ? "all" : "editors")}）`,
+    hint: "Hub 可能还不支持指定读者。在网页的「谁能看」里设置，或升级 Hub 后重试。",
+  });
+}
 
 interface ContentFlags {
   file?: string;
@@ -187,7 +283,7 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
           root: hub,
           path: documentPath(requireValue(args[0], "<publicId>")),
         });
-        return { data: docView(detail) };
+        return { data: { ...docView(detail), ...(detail.readers ? { readers: detail.readers } : {}) } };
       }),
     );
 
@@ -393,6 +489,103 @@ export function registerDocs(program: Command, deps: Deps, exit: { code: number 
         const bytes = new TextEncoder().encode(content);
         await writeLocalFile(deps.files ?? nodeFiles, options.out, bytes);
         return { data: { publicId, filename: detail.filename, out: options.out, size: bytes.byteLength } };
+      }),
+    );
+
+  doc
+    .command("audience-options")
+    .description("设置谁能看时能选的人、项目和部门（userId 和 publicId 在这里看）")
+    .action(
+      action(deps, exit, async (runtime) => {
+        const options = await (await runtime.client()).request<AudienceOptions>({
+          method: "GET",
+          root: hub,
+          path: "/documents/audience-options",
+        });
+        const departmentName = new Map(options.departments.map((d) => [d.publicId, d.name]));
+        return {
+          data: {
+            departments: options.departments,
+            projects: options.projects.map((project) => ({
+              publicId: project.publicId,
+              name: project.name,
+              members: project.members,
+              departments: project.departments
+                .filter((d) => d.memberIds.length > 0)
+                .map((d) => ({ publicId: d.publicId, name: departmentName.get(d.publicId) ?? d.publicId, memberIds: d.memberIds })),
+            })),
+          },
+        };
+      }),
+    );
+
+  doc
+    .command("+share")
+    .description("设置谁能看：所有成员、指定的人（人、项目、部门），或只有能编辑的人")
+    .argument("<publicId>", "文档的 publicId")
+    .option("--everyone", "所有登录的成员都能读")
+    .option("--editors-only", "只有所有者和能编辑的人能读")
+    .option("--reader <who>", "指定的人：名字或 userId，可重复", collect, [] as string[])
+    .option("--project <which>", "指定整个项目：publicId 或项目名，可重复", collect, [] as string[])
+    .option("--department <项目/部门>", "指定项目里的一个部门，例如「BuilderSpace 社团/运营」，可重复", collect, [] as string[])
+    .option("--dry-run", "只打印将要发出的请求")
+    .action(
+      action<{
+        everyone?: boolean;
+        editorsOnly?: boolean;
+        reader: string[];
+        project: string[];
+        department: string[];
+        dryRun?: boolean;
+      }>(deps, exit, async (runtime, args, options) => {
+        const publicId = requireValue(args[0], "<publicId>");
+        const selecting = options.reader.length + options.project.length + options.department.length > 0;
+        const modes = [options.everyone, options.editorsOnly, selecting].filter(Boolean).length;
+        if (modes !== 1) {
+          throw validationError(
+            "谁能看要从 --everyone、--editors-only、指定的人（--reader / --project / --department）里选一种",
+            "everyone",
+          );
+        }
+        const client = await runtime.client();
+
+        let audience: { kind: Audience; userIds?: string[]; groups?: ReaderGroup[] };
+        if (options.everyone) audience = { kind: "all" };
+        else if (options.editorsOnly) audience = { kind: "editors" };
+        else {
+          const choices = await client.request<AudienceOptions>({ method: "GET", root: hub, path: "/documents/audience-options" });
+          const wholeProjects = [...new Set(options.project.map((which) => resolveProject(choices, which).publicId))];
+          // A department of a project chosen as a whole is already in it; the Hub drops it too.
+          const departments = options.department
+            .map((spec) => resolveDepartment(choices, spec))
+            .filter((group) => !wholeProjects.includes(group.projectPublicId));
+          audience = {
+            kind: "selected",
+            userIds: [...new Set(options.reader.map((who) => resolveReader(choices, who)))],
+            groups: [...wholeProjects.map((projectPublicId) => ({ projectPublicId, departmentPublicId: null })), ...departments],
+          };
+        }
+
+        const spec = { method: "PATCH" as const, root: hub, path: documentPath(publicId), body: { audience } };
+        if (options.dryRun) return { data: client.describe(spec), meta: { dryRun: true } };
+
+        const updated = await client.request<DocSummary>(spec);
+        // An older Hub drops `audience` it does not know and answers 200 anyway;
+        // the document must not be left readable by more people than asked for.
+        const readers = updated.readers;
+        const missing = [
+          ...(audience.userIds ?? []).filter((id) => !readers?.users.some((user) => user.userId === id)),
+          ...(audience.groups ?? []).filter(
+            (group) =>
+              !readers?.groups.some(
+                (g) => g.projectPublicId === group.projectPublicId && g.departmentPublicId === group.departmentPublicId,
+              ),
+          ),
+        ];
+        if (updated.audience !== audience.kind || missing.length > 0) {
+          throw audienceNotApplied(publicId, audience.kind, updated);
+        }
+        return { data: { ...docView(updated), ...(updated.readers ? { readers: updated.readers } : {}) } };
       }),
     );
 

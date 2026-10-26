@@ -28,6 +28,7 @@ metadata:
 | 新建文档 | `bshub doc +create --title "…" --file 稿.md --private`，或 `--text "…"`、`--stdin`；格式由文件名决定（.md 或 .html），默认「标题.md」 |
 | 改标题、说明、文件夹 | `bshub doc +update <id> --title "…" [--description "…"] [--folder <id>]` |
 | 改可读性 | `bshub doc +update <id> --private` 或 `--public` |
+| 指定谁能看 | `bshub doc +share <id> --reader "Bob Lee" --reader Hexin`（人用名字或 userId），也可以 `--project <项目>`、`--department "项目/部门"`；全员可读 `--everyone`，只有编辑者 `--editors-only`。能选的人：`bshub doc audience-options` |
 | 替换文本内容 | `bshub doc +update <id> --file 新稿.md` |
 | 存到本地 | `bshub doc +download <id> --out ./讲稿.md` |
 | 新建文件夹 | `bshub doc folder +create --name "合同" [--parent <id>]` |

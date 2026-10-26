@@ -24,6 +24,7 @@ metadata:
 | --- | --- |
 | 我在哪些项目里 | `bshub project list` |
 | 项目里有哪些看板 | `bshub board list --project <项目id>` |
+| 看板谁能看 | `bshub board +audience <看板id>` 看现在的；`--to admins`（仅管理员可见）、`--to owner`（仅自己可见）、`--to members`（所有成员） |
 | 看板上的任务（可按阶段） | `bshub task +list --board <看板id> [--stage 待办]` |
 | 任务详情 | `bshub task +get <任务id>` |
 | 新建任务 | `bshub task +create --board <看板id> --title "…" [--stage 待办] [--due YYYY-MM-DD] [--description "…"] [--assign-me]` |

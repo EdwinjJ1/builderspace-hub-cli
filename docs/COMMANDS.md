@@ -33,6 +33,7 @@
 | `project get <id>` | 项目详情和成员 | ✅ |
 | `board list --project <id>` | 项目里的看板和列 | ✅ |
 | `board get <id>` | 看板的列和每列任务数 | ✅ |
+| `board +audience <id> [--to members\|admins\|owner]` | 看或设置看板的可见范围：所有成员 / 仅管理员可见 / 仅自己可见。走 Hub 自己的 `/api/hub/v1/boards/{id}/audience`，规则和看板页一样 | ✅ |
 | `board +overall --project <id> [--stage]` | 总版：技术 / 活动 / 运营的全部任务。在客户端逐块看板汇总，不需要新接口 | ✅ |
 | `label list --board <id>` | 看板上的标签 | ✅ |
 
@@ -78,6 +79,8 @@
 | `doc +update <id> [--title] [--description] [--folder] [--private\|--public] [--file \| --text \| --stdin] [--if-unmodified-since <updatedAt>]` | 改信息、可读性，或换掉文本内容。设为不可读会先于写入新文本；`--if-unmodified-since` 防止覆盖别人的修改（不能和改信息一起用） | ✅ |
 | `doc +download <id> --out <path>` | 把文档内容存成本地文件（读 `/content`） | ✅ |
 | `doc folder +create --name [--parent]` | 新建文件夹 | ✅ |
+| `doc +share <id> (--everyone \| --editors-only \| [--reader <名字或 userId>]… [--project <项目>]… [--department <项目/部门>]…)` | 设置谁能看，和网页的「谁能看」一样：所有成员、指定的人、只有编辑者。指定的人可以是人、整个项目或项目里的部门；Hub 返回的可见范围和要的不一样就报 `audience_not_applied` | ✅ |
+| `doc audience-options` | 能指定的人（带 userId）、项目和部门 | ✅ |
 | 删除文档、分配编辑权限 | **只能在网页里做。** API key 还没有权限范围，key 泄露时不能删文件或转让编辑权，所以刻意不开放，等带范围的 key（v0.3）再说 | — |
 
 ## 后台（需要后台角色）

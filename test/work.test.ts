@@ -417,3 +417,52 @@ describe("export and import", () => {
     expect(writes()).toHaveLength(0);
   });
 });
+
+describe("board +audience", () => {
+  const HUB = "http://localhost:3210/api/hub/v1";
+  const privacy = (audience: "admins" | "owner" | null) => ({
+    audience,
+    canSwitchTo: { members: audience !== null, admins: audience !== "admins", owner: audience !== "owner" },
+  });
+
+  it("shows who can see a board without changing it", async () => {
+    routes[`GET ${HUB}/boards/boardA000001/audience`] = () => json(privacy(null));
+    expect(await run(["board", "+audience", "boardA000001"])).toBe(0);
+    expect(lastOut().data).toEqual({
+      publicId: "boardA000001",
+      audience: "members",
+      label: "所有成员可见",
+      canSwitchTo: ["admins", "owner"],
+    });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("makes a board 仅管理员可见 and back to every member through the Hub's own API", async () => {
+    routes[`PUT ${HUB}/boards/boardA000001/audience`] = (call) =>
+      json(privacy((call.body as { audience: "admins" | null }).audience));
+
+    expect(await run(["board", "+audience", "boardA000001", "--to", "admins"])).toBe(0);
+    expect(calls.at(-1)).toMatchObject({ method: "PUT", path: "/api/hub/v1/boards/boardA000001/audience", body: { audience: "admins" } });
+    expect(lastOut().data).toMatchObject({ audience: "admins", label: "仅管理员可见" });
+
+    out = "";
+    expect(await run(["board", "+audience", "boardA000001", "--to", "members"])).toBe(0);
+    expect(calls.at(-1)!.body).toEqual({ audience: null });
+    expect(lastOut().data).toMatchObject({ audience: "members" });
+  });
+
+  it("fails loudly when the Hub answers with a different audience than asked for", async () => {
+    routes[`PUT ${HUB}/boards/boardA000001/audience`] = () => json(privacy(null));
+    expect(await run(["board", "+audience", "boardA000001", "--to", "admins"])).toBe(9);
+    expect(lastErr().error).toMatchObject({ type: "api", subtype: "audience_not_applied" });
+  });
+
+  it("rejects an unknown audience before any request, and previews without sending", async () => {
+    expect(await run(["board", "+audience", "boardA000001", "--to", "everyone"])).toBe(2);
+    expect(calls).toHaveLength(0);
+
+    expect(await run(["board", "+audience", "boardA000001", "--to", "owner", "--dry-run"])).toBe(0);
+    expect(lastOut().data).toMatchObject({ method: "PUT", body: { audience: "owner" } });
+    expect(writes()).toHaveLength(0);
+  });
+});
