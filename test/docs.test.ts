@@ -366,6 +366,158 @@ describe("doc +download", () => {
   });
 });
 
+describe("doc +share", () => {
+  const BOB = "11111111-1111-4111-8111-111111111111";
+  const HEXIN = "22222222-2222-4222-8222-222222222222";
+  const options = {
+    departments: [
+      { publicId: "dept00000001", name: "技术" },
+      { publicId: "dept00000002", name: "运营" },
+    ],
+    projects: [
+      {
+        publicId: "proj00000001",
+        name: "BuilderSpace 社团",
+        members: [
+          { userId: BOB, name: "Bob Lee" },
+          { userId: HEXIN, name: "Hexin" },
+        ],
+        departments: [{ publicId: "dept00000002", memberIds: [HEXIN] }],
+      },
+    ],
+  };
+  const patches = () => apiCalls().filter((call) => call.method === "PATCH");
+
+  beforeEach(() => {
+    routes[`GET ${H}/documents/audience-options`] = () => json(options);
+  });
+
+  it("shares a document with people by name, sending their userIds", async () => {
+    routes[`PATCH ${H}/documents/doc000000001`] = () =>
+      json(
+        doc({
+          readable: false,
+          audience: "selected",
+          readers: {
+            users: [
+              { userId: BOB, name: "Bob Lee" },
+              { userId: HEXIN, name: "Hexin" },
+            ],
+            groups: [],
+          },
+        }),
+      );
+    expect(await run(["doc", "+share", "doc000000001", "--reader", "bob lee", "--reader", HEXIN])).toBe(0);
+
+    expect(patches()[0]!.body).toEqual({ audience: { kind: "selected", userIds: [BOB, HEXIN], groups: [] } });
+    expect(lastOut().data).toMatchObject({ audience: "selected", readers: { users: [{ name: "Bob Lee" }, { name: "Hexin" }] } });
+  });
+
+  it("names projects and departments; a department of a project chosen whole is left out", async () => {
+    routes[`PATCH ${H}/documents/doc000000001`] = () =>
+      json(
+        doc({
+          readable: false,
+          audience: "selected",
+          readers: { users: [], groups: [{ projectPublicId: "proj00000001", departmentPublicId: null, label: "BuilderSpace 社团" }] },
+        }),
+      );
+    expect(
+      await run(["doc", "+share", "doc000000001", "--project", "BuilderSpace 社团", "--department", "BuilderSpace 社团/运营"]),
+    ).toBe(0);
+    expect(patches()[0]!.body).toEqual({
+      audience: { kind: "selected", userIds: [], groups: [{ projectPublicId: "proj00000001", departmentPublicId: null }] },
+    });
+
+    calls = [];
+    out = "";
+    routes[`PATCH ${H}/documents/doc000000001`] = () =>
+      json(
+        doc({
+          readable: false,
+          audience: "selected",
+          readers: { users: [], groups: [{ projectPublicId: "proj00000001", departmentPublicId: "dept00000002", label: "BuilderSpace 社团 · 运营" }] },
+        }),
+      );
+    expect(await run(["doc", "+share", "doc000000001", "--department", "proj00000001/运营"])).toBe(0);
+    expect(patches()[0]!.body).toEqual({
+      audience: { kind: "selected", userIds: [], groups: [{ projectPublicId: "proj00000001", departmentPublicId: "dept00000002" }] },
+    });
+  });
+
+  it("opens a document to everyone or closes it to its editors without looking anyone up", async () => {
+    routes[`PATCH ${H}/documents/doc000000001`] = (call) =>
+      json(
+        (call.body as { audience: { kind: string } }).audience.kind === "all"
+          ? doc({ audience: "all" })
+          : doc({ readable: false, audience: "editors" }),
+      );
+    expect(await run(["doc", "+share", "doc000000001", "--everyone"])).toBe(0);
+    expect(await run(["doc", "+share", "doc000000001", "--editors-only"])).toBe(0);
+    expect(patches().map((call) => call.body)).toEqual([{ audience: { kind: "all" } }, { audience: { kind: "editors" } }]);
+    expect(apiCalls().some((call) => call.url.endsWith("/audience-options"))).toBe(false);
+  });
+
+  it("fails when the Hub ignores the audience, so a document is never left open by mistake", async () => {
+    // What a Hub without `audience` on PATCH does: answers 200 with the document unchanged.
+    routes[`PATCH ${H}/documents/doc000000001`] = () => json(doc({ audience: "all" }));
+    expect(await run(["doc", "+share", "doc000000001", "--reader", "Hexin"])).toBe(9);
+    expect(lastErr().error).toMatchObject({ type: "api", subtype: "audience_not_applied" });
+  });
+
+  it("refuses unknown or ambiguous people and mixed choices before changing anything", async () => {
+    expect(await run(["doc", "+share", "doc000000001", "--reader", "Nobody"])).toBe(5);
+    expect(lastErr().error).toMatchObject({ type: "not_found", subtype: "unknown_reader" });
+
+    routes[`GET ${H}/documents/audience-options`] = () =>
+      json({ ...options, projects: [{ ...options.projects[0], members: [{ userId: BOB, name: "Bob" }, { userId: HEXIN, name: "bob" }] }] });
+    err = "";
+    expect(await run(["doc", "+share", "doc000000001", "--reader", "Bob"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_reader" });
+
+    expect(await run(["doc", "+share", "doc000000001"])).toBe(2);
+    expect(await run(["doc", "+share", "doc000000001", "--everyone", "--reader", "Hexin"])).toBe(2);
+    expect(await run(["doc", "+share", "doc000000001", "--department", "运营"])).toBe(2);
+    expect(patches()).toHaveLength(0);
+  });
+
+  it("refuses a project or department name that more than one has, instead of picking one", async () => {
+    const twin = { ...options.projects[0]!, publicId: "proj00000002", name: " builderspace 社团 " };
+    routes[`GET ${H}/documents/audience-options`] = () => json({ ...options, projects: [...options.projects, twin] });
+    expect(await run(["doc", "+share", "doc000000001", "--project", "BuilderSpace 社团"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_project" });
+    err = "";
+    expect(await run(["doc", "+share", "doc000000001", "--department", "BuilderSpace 社团/运营"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_project" });
+    expect(patches()).toHaveLength(0);
+
+    // The publicId still picks exactly one.
+    routes[`PATCH ${H}/documents/doc000000001`] = () =>
+      json(
+        doc({
+          readable: false,
+          audience: "selected",
+          readers: { users: [], groups: [{ projectPublicId: "proj00000002", departmentPublicId: null, label: "builderspace 社团" }] },
+        }),
+      );
+    expect(await run(["doc", "+share", "doc000000001", "--project", "proj00000002"])).toBe(0);
+    expect(patches()[0]!.body).toMatchObject({ audience: { groups: [{ projectPublicId: "proj00000002" }] } });
+
+    routes[`GET ${H}/documents/audience-options`] = () =>
+      json({ ...options, departments: [...options.departments, { publicId: "dept00000003", name: "运营" }] });
+    err = "";
+    expect(await run(["doc", "+share", "doc000000001", "--department", "proj00000001/运营"])).toBe(6);
+    expect(lastErr().error).toMatchObject({ type: "conflict", subtype: "ambiguous_department" });
+  });
+
+  it("lists who can be chosen, with department names", async () => {
+    expect(await run(["doc", "audience-options"])).toBe(0);
+    expect(lastOut().data).toMatchObject({
+      projects: [{ name: "BuilderSpace 社团", members: [{ name: "Bob Lee" }, { name: "Hexin" }], departments: [{ name: "运营", memberIds: [HEXIN] }] }],
+    });
+  });
+});
+
 describe("what the CLI does not do", () => {
   it("has no delete or access commands: those stay in the web app", async () => {
     expect(await run(["doc", "delete", "doc000000001"])).toBe(2);

@@ -83,6 +83,25 @@ export function resolveList(board: BoardDetail, target: string) {
   return list;
 }
 
+/** Who can see a board, from the Hub's `/api/hub/v1/boards/{id}/audience`; null is every project member. */
+interface BoardPrivacy {
+  audience: "admins" | "owner" | null;
+  canSwitchTo: Record<"members" | "admins" | "owner", boolean>;
+}
+
+const AUDIENCE_LABELS = { members: "所有成员可见", admins: "仅管理员可见", owner: "仅自己可见" } as const;
+
+type AudienceTarget = keyof typeof AUDIENCE_LABELS;
+
+const isAudienceTarget = (value: string): value is AudienceTarget => Object.hasOwn(AUDIENCE_LABELS, value);
+
+const boardAudienceView = (publicId: string, privacy: BoardPrivacy) => ({
+  publicId,
+  audience: privacy.audience ?? "members",
+  label: AUDIENCE_LABELS[privacy.audience ?? "members"],
+  canSwitchTo: (Object.keys(AUDIENCE_LABELS) as AudienceTarget[]).filter((to) => privacy.canSwitchTo[to]),
+});
+
 export function dueFlag(value: string): Date {
   const due = parseDueDate(value);
   if (!due) throw validationError("日期要写成 YYYY-MM-DD", "due");
@@ -151,6 +170,42 @@ export function registerResources(program: Command, deps: Deps, exit: { code: nu
             })),
           },
         };
+      }),
+    );
+
+  board
+    .command("+audience")
+    .description("看或设置看板的可见范围：所有成员 / 仅管理员可见 / 仅自己可见")
+    .argument("<publicId>", "看板的 publicId")
+    .option("--to <who>", "改成 members（所有成员）、admins（仅项目管理员）或 owner（仅自己）；不给就只看现在的")
+    .option("--dry-run", "只打印将要发出的请求")
+    .action(
+      action<{ to?: string; dryRun?: boolean }>(deps, exit, async (runtime, args, options) => {
+        const publicId = requireValue(args[0], "<publicId>");
+        const path = `/boards/${encodeURIComponent(publicId)}/audience`;
+        const client = await runtime.client();
+        if (options.to === undefined) {
+          return { data: boardAudienceView(publicId, await client.request<BoardPrivacy>({ method: "GET", root: "hub", path })) };
+        }
+
+        const to = options.to.trim().toLowerCase();
+        if (!isAudienceTarget(to)) {
+          throw validationError(`--to 只能是 members、admins 或 owner：${options.to}`, "to");
+        }
+        const audience = to === "members" ? null : to;
+        const spec = { method: "PUT" as const, root: "hub" as const, path, body: { audience } };
+        if (options.dryRun) return { data: client.describe(spec), meta: { dryRun: true } };
+
+        const privacy = await client.request<BoardPrivacy>(spec);
+        if (privacy.audience !== audience) {
+          throw new CliError({
+            type: "api",
+            subtype: "audience_not_applied",
+            message: `看板 ${publicId} 没能改成${AUDIENCE_LABELS[to]}`,
+            hint: "在看板页的可见范围按钮里设置，或升级 Hub 后重试。",
+          });
+        }
+        return { data: boardAudienceView(publicId, privacy) };
       }),
     );
 
