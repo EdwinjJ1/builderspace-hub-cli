@@ -19,7 +19,7 @@
 
 | 命令 | 说明 | 状态 |
 | --- | --- | --- |
-| `doctor` | 检查 Node、配置文件权限、Hub 可达、登录有效；不健康时退出码 1 | ✅ |
+| `doctor` | 检查 Node、配置文件权限、代理、Hub 可达、登录有效；不健康时退出码 1 | ✅ |
 | `schema [operation]` | 列出接口；查看某个接口的参数和请求体 | ✅ |
 | `api <METHOD> <path> [--params] [--data]` | 原始 API 调用 | ✅ |
 | `completion <shell>` | shell 补全 | 🔜 |
